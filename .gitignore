@@ -1,0 +1,24 @@
+# اطلاعات محرمانه — هرگز در گیت قرار نگیرد
+.env
+*.env
+!.env.example
+
+# داده‌های زمان اجرا (با آپدیت پروژه نباید بی‌دلیل حذف شوند؛ در گیت هم نگهداری نمی‌شوند)
+data/*
+!data/.gitkeep
+logs/
+*.log
+*.session
+*.session-journal
+
+# پایتون
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# سیستم‌عامل و ویرایشگر
+.DS_Store
+.idea/
+.vscode/
