@@ -41,6 +41,7 @@ from keyboards import (
     build_rules_keyboard,
 )
 from storage import (
+    STATUS_COMPLETED,
     STATUS_PAYMENT_APPROVED,
     STATUS_PENDING_REVIEW,
     STATUS_PROCESSING,
@@ -222,11 +223,35 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             return
         pending = store.list_orders(status=STATUS_PENDING_REVIEW, limit=5)
         if not pending:
-            await message.answer("✅ در حال حاضر سفارشی در انتظار بررسی پرداخت نیست.")
+            await message.answer("✅ در حال حاضر سفارشی در انتظار بررسی نیست.")
             return
-        await message.answer(f"🧾 {len(pending)} سفارش در انتظار بررسی پرداخت:")
+        await message.answer(f"🧾 {len(pending)} سفارش در انتظار بررسی:")
         for order in pending:
             user = store.get_user(order.user_key)
+            if order.service == "image":
+                # سفارش عکس پرداخت ندارد: جزئیات و دکمه‌های مخصوص خودش می‌رود
+                details = io.image_admin_html(
+                    order, user, store.ensure_daily_credit(order.user_key)
+                )
+                if order.request_photo_file_id:
+                    try:
+                        await bot.send_photo(
+                            chat_id=message.chat.id,
+                            photo=order.request_photo_file_id,
+                            caption=details[:1000],
+                            parse_mode="HTML",
+                            reply_markup=build_image_admin_keyboard(order.id),
+                        )
+                        continue
+                    except Exception:
+                        logger.exception("ارسال عکس سفارش تصویر برای مدیر ممکن نشد؛ متن می‌رود")
+                await bot.send_message(
+                    chat_id=message.chat.id,
+                    text=details,
+                    parse_mode="HTML",
+                    reply_markup=build_image_admin_keyboard(order.id),
+                )
+                continue
             await bot.send_message(
                 chat_id=message.chat.id,
                 text=vo.order_admin_html(order, user),
@@ -325,6 +350,12 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         if order is None or order.status != STATUS_PENDING_REVIEW:
             await message.answer("شناسه سفارش معتبرِ در انتظار بررسی پیدا نشد.")
             return
+        if order.service == "image":
+            await message.answer(
+                "این سفارش تصویر است و پرداخت ندارد؛ از دکمه‌های «🎨 ارسال تصویر نهایی» "
+                "یا «❌ رد سفارش» روی پیام همان سفارش استفاده کنید."
+            )
+            return
         await _apply_admin_decision(bot, order.id, approve, admin_chat_id=message.chat.id)
         await message.answer(
             f"سفارش شماره {order.id} {'تأیید' if approve else 'رد'} شد."
@@ -335,6 +366,9 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     ) -> None:
         order = store.get_order(order_id)
         if order is None or order.status != STATUS_PENDING_REVIEW:
+            return
+        if order.service == "image":
+            # تصمیم پرداخت فقط برای سفارش ویدیو است؛ سفارش عکس مسیر خودش را دارد
             return
         new_status = STATUS_PAYMENT_APPROVED if approve else STATUS_REJECTED
         store.update_status(order_id, new_status)
@@ -459,6 +493,14 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
                 store.clear_flow_state(key)
                 await message.answer("کاربر صاحب سفارش پیدا نشد؛ تحویل ممکن نیست.")
                 return
+            if order.service != "image" or order.status not in (
+                STATUS_PENDING_REVIEW,
+                STATUS_PROCESSING,
+            ):
+                # سفارش ردشده (یا تکمیل‌شده) نهایی است و دیگر تحویل داده نمی‌شود
+                store.clear_flow_state(key)
+                await message.answer("این سفارش تصویر رد یا تکمیل شده و دیگر قابل تحویل نیست.")
+                return
             photo = max(message.photo, key=lambda p: (p.file_size or 0, p.width * p.height))
             try:
                 await bot.send_photo(
@@ -470,8 +512,11 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
                 logger.exception("تحویل تصویر سفارش %s ممکن نشد", order_id)
                 await message.answer("ارسال تصویر به کاربر ناموفق بود؛ دوباره تلاش کنید.")
                 return
-            store.complete_image_delivery(order_id, photo.file_id)
+            saved = store.complete_image_delivery(order_id, photo.file_id)
             store.clear_flow_state(key)
+            if saved is None or saved.status != STATUS_COMPLETED:
+                await message.answer("وضعیت این سفارش قبلاً نهایی شده بود؛ تحویل ثبت نشد.")
+                return
             await message.answer(f"✅ تصویر سفارش شماره {order_id} برای کاربر ارسال و سفارش تکمیل شد.")
             return
         if state.startswith("admin_wait_delivery_video"):
@@ -1071,8 +1116,14 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         ):
             await _cb_answer(bot, callback, "این سفارش قبلاً بررسی شده است.", alert=True)
             return
+        # رد نهایی و کامل: وضعیت rejected می‌شود، اعتبار برمی‌گردد و اگر مدیر
+        # وسط تحویل بوده، آن حالت هم پاک می‌شود تا بعداً قابل تحویل نباشد.
         store.update_status(order_id, STATUS_REJECTED)
         balance = store.add_credit(order.user_key, order.credit_cost)
+        admin_key = _cb_user_key(callback)
+        flow = store.get_flow_state(admin_key)
+        if flow is not None and flow[0] == f"admin_wait_delivery_photo:{order_id}":
+            store.clear_flow_state(admin_key)
         await _cb_answer(bot, callback, "سفارش تصویر رد و اعتبار برگردانده شد ❌")
         owner = store.get_user(order.user_key)
         if owner and owner.chat_id:
@@ -1080,7 +1131,7 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
                 await bot.send_message(
                     chat_id=int(owner.chat_id),
                     text=(
-                        f"❌ سفارش تصویر شماره {order_id} انجام نشد.\n"
+                        f"❌ سفارش تصویر شماره {order_id} رد شد.\n"
                         f"{order.credit_cost} اعتبار به شما برگردانده شد. موجودی فعلی: {balance}"
                     ),
                 )
@@ -1292,6 +1343,14 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         order = store.get_order(order_id)
         if order is None or order.status != STATUS_PENDING_REVIEW:
             await _cb_answer(bot, callback, "این سفارش قبلاً بررسی شده است.", alert=True)
+            return
+        if order.service == "image":
+            await _cb_answer(
+                bot,
+                callback,
+                "این سفارش تصویر است؛ از دکمه‌های روی پیام سفارش تصویر استفاده کنید.",
+                alert=True,
+            )
             return
         await _apply_admin_decision(bot, order_id, approve, admin_chat_id=chat_id)
         await _cb_answer(bot, callback, "پرداخت تأیید شد ✅" if approve else "پرداخت رد شد ❌")

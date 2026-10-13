@@ -255,14 +255,14 @@ def user_orders_text(orders: list[Order], user: UserRecord) -> str:
     lines = [header]
     for order in orders:
         if getattr(order, "service", "video") == "image":
-            from image_orders import IMAGE_MODES
+            from image_orders import IMAGE_MODES, image_status_label
 
             lines.append(
                 "\n"
                 f"🖼 سفارش تصویر شماره {order.id}\n"
                 f"نوع: {IMAGE_MODES.get(order.image_mode or '', '—')} | مدل: {order.model or '—'}\n"
                 f"هزینه: {order.credit_cost} اعتبار\n"
-                f"وضعیت: {STATUS_LABELS.get(order.status, order.status)}\n"
+                f"وضعیت: {image_status_label(order.status)}\n"
                 f"تاریخ: {order.created_at}"
             )
         else:

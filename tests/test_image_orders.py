@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import image_orders as io
 import texts
+import video_orders as vo
 from config import Settings
 from handlers import build_dispatcher
 from keyboards import build_image_model_keyboard, build_image_mode_keyboard, inline_to_dict
@@ -184,6 +185,76 @@ class ImageFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.storage.ensure_daily_credit("456"), 30)
         await self._send(make_callback(f"irj:{order2.id}", **ADMIN))
         self.assertEqual(self.storage.get_order(order2.id).status, "rejected")
+        self.assertEqual(self.storage.ensure_daily_credit("456"), 40)
+        # به کاربر صریح گفته شده سفارش «رد شد»
+        user_msgs = [m["text"] for m in self.bot.sent if str(m["chat_id"]) == "123"]
+        self.assertTrue(any("رد شد" in t for t in user_msgs))
+
+    async def test_image_order_status_labels_waiting_photo_and_rejected(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        order = self.storage.create_image_order("456", "gen", "GPT 6", "یک منظره کوهستانی")
+        user = self.storage.get_user("456")
+        # مدیر هم وضعیت را «در انتظار ارسال عکس» می‌بیند، نه بررسی پرداخت
+        admin_html = io.image_admin_html(order, user)
+        self.assertIn("در انتظار ارسال عکس", admin_html)
+        self.assertNotIn("در انتظار پرداخت", admin_html)
+        self.assertNotIn("بررسی پرداخت", admin_html)
+        # و کاربر در «سفارش‌های من»
+        await self._send(make_update(texts.BTN_MY_ORDERS, update_id=30))
+        mine = self.bot.sent[-1]["text"]
+        self.assertIn("وضعیت: در انتظار ارسال عکس", mine)
+        self.assertNotIn("در انتظار پرداخت", mine)
+        # بعد از رد مدیر: همه‌جا «رد شد»
+        await self._send(make_callback(f"irj:{order.id}", update_id=31, **ADMIN))
+        await self._send(make_update(texts.BTN_MY_ORDERS, update_id=32))
+        mine = self.bot.sent[-1]["text"]
+        self.assertIn("وضعیت: رد شد", mine)
+        rejected_html = io.image_admin_html(self.storage.get_order(order.id), user)
+        self.assertIn("رد شد", rejected_html)
+
+    async def test_rejected_image_order_is_final_and_cannot_be_delivered(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        order = self.storage.create_image_order("456", "gen", "GPT 6", "یک شهر آینده‌نگر")
+        # مدیر اول تحویل را شروع می‌کند، بعد پشیمان می‌شود و رد می‌کند
+        await self._send(make_callback(f"idl:{order.id}", update_id=40, **ADMIN))
+        self.assertEqual(self.storage.get_order(order.id).status, "processing")
+        await self._send(make_callback(f"irj:{order.id}", update_id=41, **ADMIN))
+        self.assertEqual(self.storage.get_order(order.id).status, "rejected")
+        self.assertIsNone(self.storage.get_flow_state("999"))  # حالت تحویل پاک شد
+        photos_before = len([p for p in self.bot.photos if str(p["chat_id"]) == "123"])
+        # ارسال دیرهنگام عکس نباید سفارش ردشده را تکمیل یا برای کاربر بفرستد
+        await self._send(make_photo_update(file_id="late-final-img", update_id=42, **ADMIN))
+        self.assertEqual(self.storage.get_order(order.id).status, "rejected")
+        self.assertIsNone(self.storage.get_order(order.id).delivered_file_id)
+        self.assertEqual(
+            len([p for p in self.bot.photos if str(p["chat_id"]) == "123"]), photos_before
+        )
+        saved = self.storage.complete_image_delivery(order.id, "late-final-img")
+        self.assertEqual(saved.status, "rejected")
+
+    async def test_pending_list_and_payment_buttons_do_not_touch_image_orders(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        order = self.storage.create_image_order("456", "edit", "GPT 6", "ویرایش عکس")
+        await self._send(make_update(vo.ADMIN_PENDING_COMMAND, update_id=50, **ADMIN))
+        image_msgs = [
+            m for m in self.bot.sent
+            if str(m["chat_id"]) == "999" and m.get("reply_markup") is not None
+        ]
+        self.assertTrue(image_msgs)
+        callbacks = {
+            b.callback_data
+            for m in image_msgs
+            for row in m["reply_markup"].inline_keyboard
+            for b in row
+        }
+        # فهرست انتظار برای عکس، دکمه‌های خودش را می‌دهد نه تأیید/رد پرداخت
+        self.assertIn(f"idl:{order.id}", callbacks)
+        self.assertIn(f"irj:{order.id}", callbacks)
+        self.assertNotIn(f"va:{order.id}", callbacks)
+        self.assertNotIn(f"vrj:{order.id}", callbacks)
+        # و اگر دکمه پرداخت ویدیو اشتباهی روی سفارش عکس زده شود، اثری ندارد
+        await self._send(make_callback(f"vrj:{order.id}", update_id=51, **ADMIN))
+        self.assertEqual(self.storage.get_order(order.id).status, "pending_review")
         self.assertEqual(self.storage.ensure_daily_credit("456"), 40)
 
 

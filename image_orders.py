@@ -10,8 +10,16 @@ from __future__ import annotations
 
 import html
 
-from storage import Order, UserRecord
-from video_orders import STATUS_LABELS, user_display
+from storage import (
+    STATUS_COMPLETED,
+    STATUS_PAYMENT_APPROVED,
+    STATUS_PENDING_REVIEW,
+    STATUS_PROCESSING,
+    STATUS_REJECTED,
+    Order,
+    UserRecord,
+)
+from video_orders import user_display
 
 IMAGE_INTRO_PLAIN = (
     "🖼 سفارش تصویر با هوش مصنوعی روباه\n"
@@ -49,6 +57,20 @@ NO_CREDIT_TEXT = (
 DELIVER_IMAGE_BUTTON_TEXT = "🎨 ارسال تصویر نهایی"
 REJECT_IMAGE_BUTTON_TEXT = "❌ رد سفارش"
 
+# برچسب وضعیت مخصوص سفارش عکس؛ سفارش عکس پرداخت ندارد و نباید برای آن
+# «در انتظار پرداخت/بررسی پرداخت» نمایش داده شود.
+IMAGE_STATUS_LABELS = {
+    STATUS_PENDING_REVIEW: "در انتظار ارسال عکس",
+    STATUS_PROCESSING: "در انتظار ارسال عکس",
+    STATUS_PAYMENT_APPROVED: "در انتظار ارسال عکس",
+    STATUS_COMPLETED: "تکمیل شده",
+    STATUS_REJECTED: "رد شد",
+}
+
+
+def image_status_label(status: str) -> str:
+    return IMAGE_STATUS_LABELS.get(status, "در انتظار ارسال عکس")
+
 
 def balance_text(balance: int) -> str:
     return (
@@ -72,7 +94,7 @@ def image_admin_html(order: Order, user: UserRecord | None, balance: int | None 
         f"<b>شناسه شش‌رقمی:</b> {html.escape(user.code if user else '—')}\n"
         f"<b>شناسه سروش‌پلاس:</b> {html.escape(order.user_key)}\n"
         f"<b>هزینه:</b> {order.credit_cost} اعتبار\n"
-        f"<b>وضعیت:</b> {html.escape(STATUS_LABELS.get(order.status, order.status))}"
+        f"<b>وضعیت:</b> {html.escape(image_status_label(order.status))}"
         f"{balance_line}\n"
         f"<b>تاریخ:</b> {html.escape(order.created_at)}"
     )

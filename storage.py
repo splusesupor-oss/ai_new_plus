@@ -641,10 +641,13 @@ class Storage:
         return self.get_order(order_id)
 
     def complete_image_delivery(self, order_id: int, file_id: str) -> Order | None:
+        """تحویل عکس فقط برای سفارشِ در انتظار؛ سفارش ردشده کامل و نهایی است
+        و با ارسال دیرهنگام عکس دوباره تکمیل نمی‌شود."""
         with self._lock, self._connect() as conn:
             conn.execute(
                 "UPDATE orders SET delivered_file_id=?, status='completed', updated_at=?"
-                " WHERE id=? AND service='image'",
+                " WHERE id=? AND service='image'"
+                " AND status IN ('pending_review', 'processing')",
                 (file_id, _now(), order_id),
             )
         return self.get_order(order_id)
