@@ -55,11 +55,15 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     store = storage if storage is not None else Storage()
     dp = Dispatcher()
 
-    def is_admin_ids(user_id: object, chat_id: object) -> bool:
-        if not settings.admin_chat_id:
-            return False
-        admin = str(settings.admin_chat_id).strip()
-        return admin in {str(user_id), str(chat_id)}
+    def is_admin_ids(user_id: object, chat_id: object, username: object = None) -> bool:
+        # مدیر با شناسه عددی چت/حساب یا با یوزرنیم شناخته می‌شود
+        if settings.admin_chat_id:
+            admin = str(settings.admin_chat_id).strip()
+            if admin in {str(user_id), str(chat_id)}:
+                return True
+        if settings.admin_username and username:
+            return str(username).lstrip("@").lower() == settings.admin_username.lstrip("@").lower()
+        return False
 
     def ensure_user(message: Message):
         return store.get_or_create_user(
@@ -98,7 +102,8 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
 
     # ---------- دستورهای مدیریتی (فقط مدیر) ----------
     async def _deny_if_not_admin(message: Message) -> bool:
-        if is_admin_ids(_user_key(message), message.chat.id):
+        uname = message.from_user.username if message.from_user else None
+        if is_admin_ids(_user_key(message), message.chat.id, uname):
             return False
         await message.answer(
             vo.ADMIN_NOT_CONFIGURED_TEXT if not settings.admin_chat_id else vo.NOT_ADMIN_TEXT,
@@ -196,7 +201,8 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
                 logger.exception("اطلاع‌رسانی نتیجه بررسی به کاربر ممکن نشد (order=%s)", order_id)
 
     def _admin_flow_filter(message: Message, **_kwargs) -> bool:
-        if not is_admin_ids(_user_key(message), message.chat.id):
+        uname = message.from_user.username if message.from_user else None
+        if not is_admin_ids(_user_key(message), message.chat.id, uname):
             return False
         state = store.get_flow_state(_user_key(message))
         return state is not None and state[0] in {
@@ -414,7 +420,7 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
 
     async def _admin_callback(callback: CallbackQuery, bot: Bot, approve: bool) -> None:
         chat_id = callback.message.chat.id if callback.message else 0
-        if not is_admin_ids(_cb_user_key(callback), chat_id):
+        if not is_admin_ids(_cb_user_key(callback), chat_id, callback.from_user.username):
             await _cb_answer(bot, callback, vo.NOT_ADMIN_TEXT, alert=True)
             return
         try:

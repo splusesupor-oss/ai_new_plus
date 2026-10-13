@@ -18,6 +18,20 @@ class SettingsTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             Settings.from_environ({"BOT_TOKEN": "   "})
 
+    def test_production_defaults_admin_and_payment(self):
+        # فقط با توکن هم مدیر اصلی و اطلاعات پرداخت پیش‌فرض فعال‌اند
+        s = Settings.from_environ({"BOT_TOKEN": "dummy"})
+        self.assertEqual(s.admin_chat_id, "37858988")
+        self.assertEqual(s.admin_username, "osine2")
+        self.assertEqual(s.payment_card_number, "6277601447969161")
+        self.assertEqual(s.payment_card_holder, "بشار")
+        # و .env همیشه می‌تواند آن‌ها را عوض کند
+        s2 = Settings.from_environ(
+            {"BOT_TOKEN": "d", "ADMIN_CHAT_ID": "111", "PAYMENT_CARD_NUMBER": "9999"}
+        )
+        self.assertEqual(s2.admin_chat_id, "111")
+        self.assertEqual(s2.payment_card_number, "9999")
+
     def test_token_and_options_are_trimmed(self):
         s = Settings.from_environ(
             {

@@ -15,6 +15,16 @@ class ConfigError(RuntimeError):
     """خطای تنظیمات که باید با پیام فارسی و قابل‌فهم به کاربر/اپراتور نشان داده شود."""
 
 
+# مقادیر پیش‌فرض مدیر و پرداخت؛ با متغیرهای محیطی (.env) قابل تغییرند.
+# مدیر اصلی ربات:
+DEFAULT_ADMIN_CHAT_ID = "37858988"
+DEFAULT_ADMIN_USERNAME = "osine2"
+DEFAULT_SUPPORT_CONTACT = "@osine2"
+# اطلاعات پرداخت پیش‌فرض (همان کارت داخل تصویر assets/payment_card.jpg):
+DEFAULT_PAYMENT_CARD_NUMBER = "6277601447969161"
+DEFAULT_PAYMENT_CARD_HOLDER = "بشار"
+
+
 def _clean(value: str | None) -> str | None:
     """فاصله‌های اطراف را حذف می‌کند؛ مقدار خالی یعنی «تنظیم نشده»."""
     if value is None:
@@ -33,6 +43,7 @@ class Settings:
     channel_url: str | None = None
     # مدیر ربات: شناسه عددی چت/حساب مدیر در سروش‌پلاس (نه شناسه شش‌رقمی داخلی)
     admin_chat_id: str | None = None
+    admin_username: str | None = None
     # اطلاعات پرداخت: فقط از .env خوانده می‌شود و در کد/GitHub قرار نمی‌گیرد
     payment_card_number: str | None = None
     payment_card_holder: str | None = None
@@ -54,11 +65,14 @@ class Settings:
             )
         return cls(
             bot_token=token,
-            support_contact=_clean(env.get("SUPPORT_CONTACT")),
+            support_contact=_clean(env.get("SUPPORT_CONTACT")) or DEFAULT_SUPPORT_CONTACT,
             group_url=_clean(env.get("FOX_GROUP_URL")),
             channel_url=_clean(env.get("FOX_CHANNEL_URL")),
-            admin_chat_id=_clean(env.get("ADMIN_CHAT_ID")),
-            payment_card_number=_clean(env.get("PAYMENT_CARD_NUMBER")),
-            payment_card_holder=_clean(env.get("PAYMENT_CARD_HOLDER")),
+            admin_chat_id=_clean(env.get("ADMIN_CHAT_ID")) or DEFAULT_ADMIN_CHAT_ID,
+            admin_username=_clean(env.get("ADMIN_USERNAME")) or DEFAULT_ADMIN_USERNAME,
+            payment_card_number=_clean(env.get("PAYMENT_CARD_NUMBER"))
+            or DEFAULT_PAYMENT_CARD_NUMBER,
+            payment_card_holder=_clean(env.get("PAYMENT_CARD_HOLDER"))
+            or DEFAULT_PAYMENT_CARD_HOLDER,
             payment_guide_image=_clean(env.get("PAYMENT_GUIDE_IMAGE")),
         )

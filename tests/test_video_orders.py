@@ -276,6 +276,19 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(str(bot.photos[0]["photo"]).endswith("payment_card.jpg"))
         self.assertIn("هزینه را به شماره کارت بالا پرداخت کنید", bot.photos[0]["caption"])
 
+    async def test_admin_recognized_by_username_for_set_video(self):
+        # مدیر اصلی با یوزرنیم هم برای «تنظیم ویدیو» شناخته می‌شود
+        settings = Settings(
+            bot_token="x", admin_chat_id="37858988", admin_username="osine2"
+        )
+        dp = build_dispatcher(settings, self.storage)
+        bot = FakeBot()
+        update = make_update(vo.ADMIN_SET_VIDEO_COMMAND, user_id=424242, chat_id=424242, update_id=95)
+        update.message.from_user.username = "osine2"
+        await dp.feed_update(bot, update)  # type: ignore[arg-type]
+        self.assertIn("ویدیوی پیش‌فرض", bot.sent[-1]["text"])
+        self.assertIsNotNone(self.storage.get_flow_state("424242"))
+
     async def test_admin_sets_default_video_and_users_receive_it(self):
         # کاربر عادی حق ندارد
         await self._send(make_update(vo.ADMIN_SET_VIDEO_COMMAND, user_id=456, chat_id=123, update_id=40))
