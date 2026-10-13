@@ -533,18 +533,13 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             return
         user = store.get_user(order.user_key)
         try:
+            # جزئیات سفارش فقط یک بار و همراه خودِ رسید ارسال می‌شود (کپشن عکس)
             await bot.send_photo(
                 chat_id=settings.admin_chat_id,
                 photo=order.receipt_file_id,
-                caption=vo.order_admin_html(order, user, full_text=False),
+                caption=vo.order_admin_caption(order, user),
                 parse_mode="HTML",
                 reply_markup=build_admin_order_keyboard(order.id),
-            )
-            # متن کامل درخواست جداگانه می‌آید تا سقف کپشن عکس چیزی را نبرد
-            await bot.send_message(
-                chat_id=settings.admin_chat_id,
-                text=vo.order_admin_html(order, user, full_text=True),
-                parse_mode="HTML",
             )
             if order.order_type == "photo" and order.request_photo_file_id:
                 await bot.send_photo(

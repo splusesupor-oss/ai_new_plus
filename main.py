@@ -47,6 +47,46 @@ def _setup_logging() -> None:
         level=logging.INFO,
         format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     )
+    # لاگ httpx آدرس کامل API (شامل توکن) را چاپ می‌کند؛ بسته می‌شود تا
+    # هم توکن در لاگ نیاید و هم خروجی Termux سبک و سریع بماند.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+async def _polling_loop(bot, dp) -> None:
+    """دریافت پیام‌ها با Long Polling و تلاش مجدد سریع و کم‌صدا.
+
+    به‌جای حلقه پیش‌فرض کتابخانه استفاده می‌شود تا خطاهای موقت شبکه
+    (مثل ReadError) فقط با یک خط لاگ و تلاش مجدد کوتاه مدیریت شوند و
+    تریس‌بک‌های طولانی و مکث اضافی سرعت پاسخ به کاربر را کم نکنند.
+    """
+    offset = 0
+    while True:
+        try:
+            updates = await bot.get_updates(offset=offset, limit=100, timeout=50)
+            for update in updates:
+                offset = update.update_id + 1
+                task = asyncio.create_task(dp.feed_update(bot, update))
+                task.add_done_callback(_log_task_error)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            from aiosplus.exceptions import NetworkError
+
+            if isinstance(exc, NetworkError):
+                logging.warning("ارتباط با سروش‌پلاس موقتاً قطع شد؛ تلاش مجدد خودکار...")
+                await asyncio.sleep(3)
+            else:
+                logging.error("خطا در دریافت پیام‌ها: %s؛ تلاش مجدد...", exc)
+                await asyncio.sleep(2)
+
+
+def _log_task_error(task: "asyncio.Task[object]") -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logging.error("خطا در پردازش یک پیام: %s", exc)
 
 
 async def _run() -> int:
@@ -115,7 +155,7 @@ async def _run() -> int:
 
     logging.info("🦊 ربات روباه در حال اجراست... برای توقف Ctrl+C را بزنید.")
     try:
-        await dp.start_polling(bot)
+        await _polling_loop(bot, dp)
     except KeyboardInterrupt:
         logging.info("ربات با درخواست کاربر متوقف شد.")
     finally:

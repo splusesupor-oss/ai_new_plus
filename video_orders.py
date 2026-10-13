@@ -207,6 +207,20 @@ def order_admin_html(order: Order, user: UserRecord | None, full_text: bool = Tr
     )
 
 
+def order_admin_caption(order: Order, user: UserRecord | None) -> str:
+    """جزئیات سفارش در همان کپشنِ عکس رسید (فقط یک پیام برای مدیر).
+
+    متن درخواست اگر خیلی بلند باشد کوتاه می‌شود تا کل جزئیات داخل
+    سقف کپشن عکس جا شود؛ متن کامل در دیتابیس ربات هست.
+    """
+    from dataclasses import replace
+
+    text = order.request_text or ""
+    if len(text) > 380:
+        text = text[:380] + "…"
+    return order_admin_html(replace(order, request_text=text), user, full_text=True)
+
+
 def broadcast_to_html(raw: str) -> str:
     """تبدیل متن مدیر به HTML امن؛ بخش‌های **...** به Bold تبدیل می‌شوند.
 

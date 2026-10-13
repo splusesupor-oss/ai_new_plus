@@ -137,9 +137,11 @@ class FeaturesTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<b>", caption)
         for needle in ("نوع سفارش", "شناسه شش‌رقمی", "مدل انتخابی", "مبلغ"):
             self.assertIn(needle, caption)
-        full = "\n".join(m["text"] for m in self.bot.sent if str(m["chat_id"]) == "999")
-        self.assertIn(LONG_TEXT, full)
-        self.assertIn("@buyer2", full)
+        # جزئیات فقط یک بار و همراه خود رسید آمده؛ پیام متنی جداگانه‌ای برای مدیر نیست
+        self.assertIn(LONG_TEXT, caption)
+        self.assertIn("@buyer2", caption)
+        admin_texts = [m for m in self.bot.sent if str(m["chat_id"]) == "999"]
+        self.assertEqual(admin_texts, [])
 
     async def test_delivery_after_approval(self):
         order = self._pending_order()
