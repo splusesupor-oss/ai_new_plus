@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
 from pathlib import Path
 
@@ -125,6 +127,57 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             except Exception:
                 logger.exception("ارسال عکس قوانین ممکن نشد؛ متن قوانین ارسال می‌شود")
         await bot.send_message(chat_id=chat_id, text=texts.RULES_CAPTION, reply_markup=markup)
+
+    # ---------- ارسال سریع عکس‌های محلی با کش file_id ----------
+    def _local_photo_cache_key(prefix: str, path: Path) -> str:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return f"photo_file_id:{prefix}:{digest}"
+
+    async def _send_local_photo_cached(
+        bot: Bot,
+        chat_id: object,
+        path: Path,
+        cache_prefix: str,
+        caption: str | None = None,
+        parse_mode: str | None = None,
+        reply_markup: object = None,
+    ):
+        """عکس محلی را بار اول آپلود و دفعات بعد با file_id می‌فرستد.
+
+        آپلود تکراری فایل (مثل کارت پرداخت) روی شبکه گوشی کند است؛ وقتی
+        سروش‌پلاس file_id داد، همان ذخیره و برای ارسال‌های بعدی استفاده
+        می‌شود تا مرحله پرداخت تقریباً فوری شود.
+        """
+        key = _local_photo_cache_key(cache_prefix, path)
+        cached = store.get_setting(key)
+        if cached:
+            try:
+                return await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=cached,
+                    caption=caption,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                logger.warning("file_id ذخیره‌شده عکس پذیرفته نشد؛ آپلود مجدد انجام می‌شود")
+                store.set_setting(key, None)
+        sent = await bot.send_photo(
+            chat_id=chat_id,
+            photo=str(path),
+            caption=caption,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+        photos = getattr(sent, "photo", None)
+        if photos:
+            try:
+                best = max(photos, key=lambda p: (p.file_size or 0, p.width * p.height))
+                if best.file_id:
+                    store.set_setting(key, best.file_id)
+            except Exception:
+                logger.exception("ذخیره file_id عکس ممکن نشد؛ ارسال انجام شد")
+        return sent
 
     def _is_start_or_menu(message: Message) -> bool:
         raw = (message.text or "").strip()
@@ -857,24 +910,35 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     @dp.message(Text(text=texts.BTN_CREATE_VIDEO))
     async def start_video_order(message: Message, bot: Bot) -> None:
         ensure_user(message)
-        # ویدیوی پیش‌فرض مدیر (اگر تنظیم و فعال باشد) همراه متنش ارسال می‌شود
+        store.create_or_get_draft(_user_key(message))
+
+        async def _send_intro() -> None:
+            await bot.send_message(
+                chat_id=message.chat.id,
+                text=vo.VIDEO_INTRO_HTML,
+                parse_mode="HTML",
+                reply_markup=build_order_type_keyboard(),
+            )
+
+        # ویدیوی پیش‌فرض مدیر (اگر تنظیم و فعال باشد) هم‌زمان با پیام و
+        # دکمه‌های شروع می‌رود تا کاربر برای دیدن دکمه‌ها منتظر ویدیو نماند.
+        default_file = None
+        default_caption = None
         if store.get_setting(vo.DEFAULT_VIDEO_ENABLED_KEY) == "1":
-            file_id = store.get_setting(vo.DEFAULT_VIDEO_FILE_KEY)
-            caption = store.get_setting(vo.DEFAULT_VIDEO_TEXT_KEY)
-            if file_id:
+            default_file = store.get_setting(vo.DEFAULT_VIDEO_FILE_KEY)
+            default_caption = store.get_setting(vo.DEFAULT_VIDEO_TEXT_KEY)
+        if default_file:
+            async def _send_default_video() -> None:
                 try:
                     await bot.send_video(
-                        chat_id=message.chat.id, video=file_id, caption=caption
+                        chat_id=message.chat.id, video=default_file, caption=default_caption
                     )
                 except Exception:
                     logger.exception("ارسال ویدیوی پیش‌فرض ممکن نشد؛ فرایند سفارش ادامه می‌یابد")
-        store.create_or_get_draft(_user_key(message))
-        await bot.send_message(
-            chat_id=message.chat.id,
-            text=vo.VIDEO_INTRO_HTML,
-            parse_mode="HTML",
-            reply_markup=build_order_type_keyboard(),
-        )
+
+            await asyncio.gather(_send_default_video(), _send_intro())
+        else:
+            await _send_intro()
 
     @dp.message(Text(text=texts.BTN_MY_ORDERS))
     async def my_orders(message: Message) -> None:
@@ -1157,9 +1221,12 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             await _cb_answer(bot, callback, vo.RECEIPT_DUPLICATE_TEXT, alert=True)
             return
         store.set_flow_state(user_key, f"wait_order_{kind}:{draft.id}")
-        await _cb_answer(bot, callback, f"«{vo.ORDER_TYPES[kind]}» انتخاب شد.")
         prompt = vo.ORDER_TEXT_PROMPT if kind == "text" else vo.ORDER_PHOTO_PROMPT
-        await bot.send_message(chat_id=chat_id, text=prompt)
+        # پاسخ کال‌بک و پیام مرحله بعد هم‌زمان می‌روند تا زمان کلیک نصف شود
+        await asyncio.gather(
+            _cb_answer(bot, callback, f"«{vo.ORDER_TYPES[kind]}» انتخاب شد."),
+            bot.send_message(chat_id=chat_id, text=prompt),
+        )
 
     @dp.callback_query(Text(startswith="vdl:"))
     async def on_deliver_clicked(callback: CallbackQuery, bot: Bot) -> None:
@@ -1252,12 +1319,14 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             await _cb_answer(bot, callback, vo.RECEIPT_DUPLICATE_TEXT, alert=True)
             return
         order = store.set_order_model(draft.id, user_key, model) or draft
-        await _cb_answer(bot, callback, f"مدل {model} انتخاب شد.")
-        await bot.send_message(
-            chat_id=chat_id,
-            text=f"✅ مدل «{model}» برای سفارش شماره {order.id} انتخاب شد.\n"
-            "حالا مدت ویدیو را انتخاب کنید:",
-            reply_markup=build_duration_keyboard(),
+        await asyncio.gather(
+            _cb_answer(bot, callback, f"مدل {model} انتخاب شد."),
+            bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ مدل «{model}» برای سفارش شماره {order.id} انتخاب شد.\n"
+                "حالا مدت ویدیو را انتخاب کنید:",
+                reply_markup=build_duration_keyboard(),
+            ),
         )
 
     @dp.callback_query(Text(startswith="vd:"))
@@ -1277,8 +1346,10 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             return
         # کلیک مکرر روی مدت، سفارش تازه نمی‌سازد؛ همان سفارش به‌روز می‌شود
         order = store.set_order_duration(draft.id, user_key, seconds, vo.DURATIONS[seconds]) or draft
-        await _cb_answer(bot, callback, "مدت و مبلغ ثبت شد.")
-        await _send_payment(bot, chat_id, order)
+        await asyncio.gather(
+            _cb_answer(bot, callback, "مدت و مبلغ ثبت شد."),
+            _send_payment(bot, chat_id, order),
+        )
 
     async def _send_payment(bot: Bot, chat_id: int, order) -> None:
         text = vo.build_payment_text(order, settings)
@@ -1291,9 +1362,11 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         guide = settings.payment_guide_image or (str(bundled) if bundled.is_file() else None)
         if guide and Path(guide).is_file():
             try:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=str(Path(guide)),
+                await _send_local_photo_cached(
+                    bot,
+                    chat_id,
+                    Path(guide),
+                    "payment_guide",
                     caption=text,
                     parse_mode="HTML",
                     reply_markup=markup,
@@ -1320,8 +1393,10 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             await _cb_answer(bot, callback, vo.RECEIPT_DUPLICATE_TEXT, alert=True)
             return
         store.request_receipt(order.id, order.user_key)
-        await _cb_answer(bot, callback)
-        await bot.send_message(chat_id=chat_id, text=vo.RECEIPT_PROMPT_TEXT)
+        await asyncio.gather(
+            _cb_answer(bot, callback),
+            bot.send_message(chat_id=chat_id, text=vo.RECEIPT_PROMPT_TEXT),
+        )
 
     @dp.callback_query(Text(startswith="va:"))
     async def on_admin_approve(callback: CallbackQuery, bot: Bot) -> None:

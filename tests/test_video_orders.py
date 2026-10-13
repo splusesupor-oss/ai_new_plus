@@ -4,10 +4,12 @@
 پوشش: کد شش‌رقمی، انتخاب مدل/مدت/مبلغ، ضدتکرار، رسید، صف مدیر،
 تأیید/رد مدیر، سفارش‌های من، تنظیم ویدیوی دائمی و جدایی کاربران.
 """
+import hashlib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -317,6 +319,57 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         await dp.feed_update(bot, update)  # type: ignore[arg-type]
         self.assertIn("ویدیوی پیش‌فرض", bot.sent[-1]["text"])
         self.assertIsNotNone(self.storage.get_flow_state("424242"))
+
+    async def test_payment_card_uploaded_once_then_sent_by_file_id(self):
+        # بات جعلی‌ای که مثل API واقعی بعد از آپلود، file_id برمی‌گرداند
+        class UploadReturningBot(FakeBot):
+            async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **kwargs):
+                await super().send_photo(chat_id, photo, caption=caption, reply_markup=reply_markup, **kwargs)
+                return SimpleNamespace(
+                    message_id=777,
+                    photo=[
+                        SimpleNamespace(
+                            file_id="uploaded-payment-file-id",
+                            file_unique_id="u9",
+                            width=10,
+                            height=10,
+                            file_size=10,
+                        )
+                    ],
+                )
+
+        self.bot = UploadReturningBot()
+        # راهنمای پرداخت خالی یعنی تصویر پیش‌فرض داخل پروژه استفاده می‌شود
+        self.storage.get_or_create_user("456", chat_id="123")
+        self.storage.set_rules_accepted("456", True)
+        dp = build_dispatcher(
+            Settings(
+                bot_token="x",
+                admin_chat_id="999",
+                payment_card_number="1111222233334444",
+                payment_card_holder="صاحب کارت تست",
+            ),
+            self.storage,
+        )
+
+        async def send(update):
+            handled = await dp.feed_update(self.bot, update)  # type: ignore[arg-type]
+            self.assertTrue(handled)
+
+        await send(make_update(texts.BTN_CREATE_VIDEO, update_id=300))
+        await send(make_callback("vt:text", update_id=301))
+        await send(make_update("متن نمونه برای سفارش ویدیو " * 6, update_id=302))
+        await send(make_callback("vm:mplus", update_id=303))
+        await send(make_callback("vd:10", update_id=304))
+        first_photo = self.bot.photos[-1]["photo"]
+        self.assertTrue(str(first_photo).endswith("payment_card.jpg"))  # بار اول آپلود شد
+        # file_id در تنظیمات ذخیره شده است
+        bundled = Path(__file__).resolve().parents[1] / "assets" / "payment_card.jpg"
+        key = f"photo_file_id:payment_guide:{hashlib.sha256(bundled.read_bytes()).hexdigest()}"
+        self.assertEqual(self.storage.get_setting(key), "uploaded-payment-file-id")
+        # کلیک دوباره روی مدت: دیگر آپلودی نیست، همان file_id می‌رود (سریع)
+        await send(make_callback("vd:10", update_id=305))
+        self.assertEqual(self.bot.photos[-1]["photo"], "uploaded-payment-file-id")
 
     async def test_admin_sets_default_video_and_users_receive_it(self):
         # کاربر عادی حق ندارد

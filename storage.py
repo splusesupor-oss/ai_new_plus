@@ -132,7 +132,8 @@ class Storage:
         conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         try:
-            conn.execute("PRAGMA journal_mode=WAL")
+            # journal_mode=WAL یک بار در ساخت اسکیما تنظیم می‌شود و دائمی
+            # است؛ اجرای آن در هر اتصال فقط کار اضافی روی گوشی بود.
             conn.execute("PRAGMA foreign_keys=ON")
             yield conn
             conn.commit()
@@ -141,6 +142,7 @@ class Storage:
 
     def _init_schema(self) -> None:
         with self._lock, self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
