@@ -80,7 +80,11 @@ class HandlersTest(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    async def _dispatch(self, text, user_id=456, chat_id=123):
+    async def _dispatch(self, text, user_id=456, chat_id=123, pre_accepted=True):
+        if pre_accepted:
+            # رفتار منو برای کاربری که قوانین را قبلاً تأیید کرده است
+            self.storage.get_or_create_user(str(user_id), chat_id=str(chat_id))
+            self.storage.set_rules_accepted(str(user_id), True)
         bot = FakeBot()
         dp = build_dispatcher(SETTINGS, self.storage)
         handled = await dp.feed_update(bot, make_update(text, user_id=user_id, chat_id=chat_id))  # type: ignore[arg-type]
@@ -88,6 +92,12 @@ class HandlersTest(unittest.IsolatedAsyncioTestCase):
         return bot
 
     async def test_start_sends_welcome_with_reply_keyboard(self):
+        # کاربر تازه اول قوانین را می‌بیند؛ بعد از تأیید، /start منو را می‌دهد
+        bot = await self._dispatch("/start", pre_accepted=False)
+        self.assertEqual(bot.sent, [])
+        self.assertEqual(len(bot.photos), 1)
+        self.assertTrue(str(bot.photos[0]["photo"]).endswith("rules.jpg"))
+        self.storage.set_rules_accepted("456", True)
         bot = await self._dispatch("/start")
         self.assertEqual(len(bot.sent), 1)
         sent = bot.sent[0]

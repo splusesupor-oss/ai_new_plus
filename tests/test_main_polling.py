@@ -39,7 +39,9 @@ class PollingLoopTest(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(asyncio.CancelledError):
                 await main_module._polling_loop(bot, dp)  # type: ignore[arg-type]
             await asyncio.sleep(0.05)  # تسک پردازش پیام کامل شود
-            self.assertTrue(any("خوش آمدید" in m["text"] for m in bot.sent))
+            # اولین /start حالا عکس قوانین با دکمه تأیید است، نه خوشامد مستقیم
+            self.assertTrue(bot.photos)
+            self.assertTrue(str(bot.photos[0]["photo"]).endswith("rules.jpg"))
 
 
 if __name__ == "__main__":

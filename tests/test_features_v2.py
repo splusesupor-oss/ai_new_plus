@@ -43,6 +43,19 @@ class FeaturesTest(unittest.IsolatedAsyncioTestCase):
 
     async def _send(self, update):
         self._uid += 1
+        # دروازه قوانین در test_rules_gate.py سنجیده می‌شود؛ اینجا فرستنده
+        # از قبل قوانین را تأیید کرده فرض می‌شود.
+        sender = None
+        chat_id = None
+        if update.message is not None:
+            sender = update.message.from_user
+            chat_id = update.message.chat.id
+        elif update.callback_query is not None:
+            sender = update.callback_query.from_user
+            chat_id = update.callback_query.message.chat.id if update.callback_query.message else None
+        if sender is not None:
+            self.storage.get_or_create_user(str(sender.id), chat_id=str(chat_id))
+            self.storage.set_rules_accepted(str(sender.id), True)
         handled = await self.dp.feed_update(self.bot, update)  # type: ignore[arg-type]
         self.assertTrue(handled)
 
@@ -70,7 +83,7 @@ class FeaturesTest(unittest.IsolatedAsyncioTestCase):
         before = len(self.bot.sent)
         await self._send(make_update(vo.ADMIN_MEMBERS_COMMAND, **ADMIN))
         joined = "\n".join(m["text"] for m in self.bot.sent[before:])
-        self.assertIn("تعداد کل: 2", joined)
+        self.assertIn("تعداد کل: 3", joined)  # دو کاربر + مدیر (که خودش قوانین را تأیید کرده)
         self.assertIn("@ali", joined)
         code = self.storage.get_user("456").code
         self.assertIn(code, joined)

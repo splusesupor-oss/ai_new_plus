@@ -79,6 +79,7 @@ class UserRecord:
     is_blocked: bool = False
     credit_balance: int = DAILY_FREE_CREDIT
     credit_date: str | None = None
+    rules_accepted: bool = False  # تا تأیید نشود، هیچ منو/دکمه‌ای برای کاربر باز نمی‌شود
 
 
 @dataclass(frozen=True)
@@ -194,6 +195,7 @@ class Storage:
                     "is_blocked": "INTEGER NOT NULL DEFAULT 0",
                     "credit_balance": "INTEGER NOT NULL DEFAULT 50",
                     "credit_date": "TEXT",
+                    "rules_accepted": "INTEGER NOT NULL DEFAULT 0",
                 },
                 "orders": {
                     "order_type": "TEXT",
@@ -306,7 +308,23 @@ class Storage:
                 int(row["credit_balance"]) if "credit_balance" in keys and row["credit_balance"] is not None else DAILY_FREE_CREDIT
             ),
             credit_date=row["credit_date"] if "credit_date" in keys else None,
+            rules_accepted=(
+                bool(row["rules_accepted"]) if "rules_accepted" in keys and row["rules_accepted"] is not None else False
+            ),
         )
+
+    # ---------- تأیید قوانین (دروازه ورود به منو) ----------
+    def has_accepted_rules(self, user_key: str) -> bool:
+        user = self.get_user(user_key)
+        return bool(user and user.rules_accepted)
+
+    def set_rules_accepted(self, user_key: str, accepted: bool = True) -> UserRecord | None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET rules_accepted=? WHERE user_key=?",
+                (1 if accepted else 0, str(user_key)),
+            )
+        return self.get_user(user_key)
 
     # ---------- اعتبار رایگان روزانه ----------
     def ensure_daily_credit(self, user_key: str) -> int:

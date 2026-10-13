@@ -163,6 +163,19 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self._tmp.cleanup()
 
     async def _send(self, update):
+        # این کلاس رفتار سفارش را می‌سنجد، نه دروازه قوانین؛ فرستنده از قبل
+        # قوانین را تأیید کرده فرض می‌شود (دروازه در test_rules_gate.py است).
+        sender = None
+        chat_id = None
+        if update.message is not None:
+            sender = update.message.from_user
+            chat_id = update.message.chat.id
+        elif update.callback_query is not None:
+            sender = update.callback_query.from_user
+            chat_id = update.callback_query.message.chat.id if update.callback_query.message else None
+        if sender is not None:
+            self.storage.get_or_create_user(str(sender.id), chat_id=str(chat_id))
+            self.storage.set_rules_accepted(str(sender.id), True)
         handled = await self.dp.feed_update(self.bot, update)  # type: ignore[arg-type]
         self.assertTrue(handled)
 
@@ -229,6 +242,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("مربوط به سفارش شما نیست" in (a["text"] or "") for a in self.bot.callback_answers))
 
     async def test_payment_not_configured_no_fake_card(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        self.storage.set_rules_accepted("456", True)
         dp = build_dispatcher(Settings(bot_token="x", admin_chat_id="999"), self.storage)
         bot = FakeBot()
         await dp.feed_update(bot, make_update(texts.BTN_CREATE_VIDEO, update_id=30))  # type: ignore[arg-type]
@@ -239,6 +254,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("هنوز توسط مدیر تنظیم نشده است", bot.sent[-1]["text"])
 
     async def test_payment_guide_image_sent_when_file_exists(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        self.storage.set_rules_accepted("456", True)
         guide = Path(self._tmp.name) / "guide.jpg"
         guide.write_bytes(b"fake-jpeg-for-test")
         settings = Settings(
@@ -262,6 +279,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         # و اگر فایل نباشد، بدون کرش فقط متن می‌آید (مسیر پیش‌فرض تست‌های دیگر)
 
     async def test_bundled_payment_card_image_used_by_default(self):
+        self.storage.get_or_create_user("456", chat_id="123")
+        self.storage.set_rules_accepted("456", True)
         # بدون PAYMENT_GUIDE_IMAGE، تصویر پیش‌فرض assets/payment_card.jpg می‌آید
         bundled = Path(__file__).resolve().parents[1] / "assets" / "payment_card.jpg"
         self.assertTrue(bundled.is_file())
@@ -289,6 +308,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         settings = Settings(
             bot_token="x", admin_chat_id="37858988", admin_username="osine2"
         )
+        self.storage.get_or_create_user("424242", chat_id="424242", username="osine2")
+        self.storage.set_rules_accepted("424242", True)
         dp = build_dispatcher(settings, self.storage)
         bot = FakeBot()
         update = make_update(vo.ADMIN_SET_VIDEO_COMMAND, user_id=424242, chat_id=424242, update_id=95)

@@ -38,6 +38,7 @@ from keyboards import (
     build_model_keyboard,
     build_order_type_keyboard,
     build_receipt_keyboard,
+    build_rules_keyboard,
 )
 from storage import (
     STATUS_PAYMENT_APPROVED,
@@ -107,14 +108,47 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             reply_markup=build_main_keyboard() if reply.show_main_keyboard else None,
         )
 
+    # ---------- دروازه قوانین: قبل از تأیید، هیچ منو/دکمه‌ای باز نمی‌شود ----------
+    async def _send_rules(bot: Bot, chat_id: int) -> None:
+        img = Path(__file__).resolve().parent / "assets" / "rules.jpg"
+        markup = build_rules_keyboard()
+        if img.is_file():
+            try:
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=str(img),
+                    caption=texts.RULES_CAPTION,
+                    reply_markup=markup,
+                )
+                return
+            except Exception:
+                logger.exception("ارسال عکس قوانین ممکن نشد؛ متن قوانین ارسال می‌شود")
+        await bot.send_message(chat_id=chat_id, text=texts.RULES_CAPTION, reply_markup=markup)
+
+    def _is_start_or_menu(message: Message) -> bool:
+        raw = (message.text or "").strip()
+        first = raw.split(maxsplit=1)[0].split("@", 1)[0].lower() if raw else ""
+        return first in ("/start", "/menu") or raw == texts.MENU_TEXT_COMMAND
+
+    def _rules_guard_filter(message: Message, **_kw) -> bool:
+        if _is_start_or_menu(message):
+            return False
+        return not store.has_accepted_rules(_user_key(message))
+
     # ---------- نگه‌دار مسدودی (قبل از همه) ----------
     @dp.message(lambda m, **_kw: store.get_user(_user_key(m)) is not None and _is_blocked(m))
     async def blocked_guard(message: Message) -> None:
         await message.answer(vo.BLOCKED_TEXT)
 
+    @dp.message(_rules_guard_filter)
+    async def rules_guard(message: Message, bot: Bot) -> None:
+        # هر پیام/دکمه‌ای قبل از تأیید قوانین فقط عکس قوانین را می‌بیند
+        ensure_user(message)
+        await _send_rules(bot, message.chat.id)
+
     # ---------- دستورهای منو ----------
     @dp.message(Command("start"))
-    async def cmd_start(message: Message) -> None:
+    async def cmd_start(message: Message, bot: Bot) -> None:
         # اولین /start برای هر کاربر، شناسه شش‌رقمی پایدار او را می‌سازد
         user = ensure_user(message)
         logger.info(
@@ -123,14 +157,25 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             user.code,
             user.chat_id,
         )
+        if not user.rules_accepted:
+            await _send_rules(bot, message.chat.id)
+            return
         await _answer(message)
 
     @dp.message(Command("menu"))
-    async def cmd_menu(message: Message) -> None:
+    async def cmd_menu(message: Message, bot: Bot) -> None:
+        user = ensure_user(message)
+        if not user.rules_accepted:
+            await _send_rules(bot, message.chat.id)
+            return
         await _answer(message)
 
     @dp.message(Text(text=texts.MENU_TEXT_COMMAND))
-    async def cmd_menu_fa(message: Message) -> None:
+    async def cmd_menu_fa(message: Message, bot: Bot) -> None:
+        user = ensure_user(message)
+        if not user.rules_accepted:
+            await _send_rules(bot, message.chat.id)
+            return
         await _answer(message)
 
     # ---------- دستورهای مدیریتی (فقط مدیر) ----------
@@ -907,6 +952,37 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     @dp.callback_query(_cb_blocked)
     async def blocked_callback_guard(callback: CallbackQuery, bot: Bot) -> None:
         await _cb_answer(bot, callback, vo.BLOCKED_TEXT, alert=True)
+
+    def _cb_rules_blocked(callback: CallbackQuery, **_kw) -> bool:
+        if callback.data == "rules:accept":
+            return False
+        return not store.has_accepted_rules(_cb_user_key(callback))
+
+    @dp.callback_query(_cb_rules_blocked)
+    async def rules_callback_guard(callback: CallbackQuery, bot: Bot) -> None:
+        await _cb_answer(bot, callback, texts.RULES_REQUIRED_TEXT, alert=True)
+
+    @dp.callback_query(Text(startswith="rules:"))
+    async def on_rules_accept(callback: CallbackQuery, bot: Bot) -> None:
+        chat_id = callback.message.chat.id if callback.message else None
+        if callback.data != "rules:accept" or chat_id is None:
+            await _cb_answer(bot, callback, "گزینه نامعتبر است.", alert=True)
+            return
+        user_key = _cb_user_key(callback)
+        store.get_or_create_user(
+            user_key,
+            chat_id=str(chat_id),
+            username=callback.from_user.username,
+            display_name=getattr(callback.from_user, "full_name", None),
+        )
+        store.set_rules_accepted(user_key, True)
+        await _cb_answer(bot, callback, "قوانین تأیید شد ✅")
+        # تازه بعد از تأیید قوانین، منوی اصلی برای کاربر باز می‌شود
+        await bot.send_message(
+            chat_id=chat_id,
+            text=texts.WELCOME_TEXT,
+            reply_markup=build_main_keyboard(),
+        )
 
     @dp.callback_query(Text(startswith="it:"))
     async def on_image_mode_chosen(callback: CallbackQuery, bot: Bot) -> None:

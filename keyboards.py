@@ -200,3 +200,16 @@ def build_channel_keyboard(url: str) -> InlineKeyboardMarkup:
             [InlineKeyboardButton(text=texts.FOX_CHANNEL_USERNAME, url=url)]
         ]
     )
+
+
+def build_rules_keyboard() -> InlineKeyboardMarkup:
+    """دکمه تأیید قوانین زیر عکس قوانین؛ تا زده نشود منو باز نمی‌شود."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=texts.RULES_ACCEPT_BUTTON_TEXT, callback_data="rules:accept"
+                )
+            ]
+        ]
+    )

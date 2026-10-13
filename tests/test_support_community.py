@@ -56,6 +56,19 @@ class SupportCommunityTest(unittest.IsolatedAsyncioTestCase):
         self._tmp.cleanup()
 
     async def _send(self, update):
+        # دروازه قوانین در test_rules_gate.py سنجیده می‌شود؛ اینجا فرستنده
+        # از قبل قوانین را تأیید کرده فرض می‌شود.
+        sender = None
+        chat_id = None
+        if update.message is not None:
+            sender = update.message.from_user
+            chat_id = update.message.chat.id
+        elif update.callback_query is not None:
+            sender = update.callback_query.from_user
+            chat_id = update.callback_query.message.chat.id if update.callback_query.message else None
+        if sender is not None:
+            self.storage.get_or_create_user(str(sender.id), chat_id=str(chat_id))
+            self.storage.set_rules_accepted(str(sender.id), True)
         handled = await self.dp.feed_update(self.bot, update)  # type: ignore[arg-type]
         self.assertTrue(handled)
 
