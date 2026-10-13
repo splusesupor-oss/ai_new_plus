@@ -41,12 +41,10 @@ def route_message(raw_text: str | None, settings: _SettingsLike) -> Reply:
         return Reply(text=texts.WELCOME_TEXT, show_main_keyboard=True)
 
     # دکمه‌های منوی اصلی (مقایسه دقیق با همان عنوانی که روی دکمه است)
+    # «ساخت ویدیو» و «سفارش‌های من» اینجا نیستند؛ در handlers با دیتابیس و
+    # کیبورد شیشه‌ای پاسخ داده می‌شوند و قبل از این مسیر عمومی گرفته می‌شوند.
     if text == texts.BTN_CREATE_IMAGE:
         return Reply(text=texts.CREATE_IMAGE_SOON_TEXT)
-    if text == texts.BTN_CREATE_VIDEO:
-        return Reply(text=texts.CREATE_VIDEO_SOON_TEXT)
-    if text == texts.BTN_MY_ORDERS:
-        return Reply(text=texts.MY_ORDERS_TEXT)
     if text == texts.BTN_FREE_CREDIT:
         return Reply(text=texts.FREE_CREDIT_TEXT)
     if text == texts.BTN_SAMPLES:

@@ -37,6 +37,11 @@ class SettingsTest(unittest.TestCase):
         for line in content.splitlines():
             if line.startswith("BOT_TOKEN="):
                 self.assertEqual(line, "BOT_TOKEN=")
+        # اطلاعات حساس پرداخت و مدیر هم در فایل نمونه باید خالی باشند
+        for key in ("ADMIN_CHAT_ID=", "PAYMENT_CARD_NUMBER=", "PAYMENT_CARD_HOLDER="):
+            for line in content.splitlines():
+                if line.startswith(key):
+                    self.assertEqual(line, key)
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn(".env", gitignore)
 

@@ -41,18 +41,22 @@ class ButtonsTest(unittest.TestCase):
             route_message(texts.BTN_CREATE_IMAGE, EMPTY).text,
             "بخش ساخت تصویر به‌زودی فعال می‌شود.",
         )
-        self.assertEqual(
-            route_message(texts.BTN_CREATE_VIDEO, EMPTY).text,
-            "بخش ساخت ویدیو به‌زودی فعال می‌شود.",
-        )
+        # «ساخت ویدیو» و «سفارش‌های من» دیگر متن ثابت ندارند و در handlers
+        # به‌صورت واقعی پاسخ داده می‌شوند (در test_video_orders پوشش دارند).
 
     def test_not_launched_buttons(self):
-        self.assertIn("هنوز راه‌اندازی نشده است", route_message(texts.BTN_MY_ORDERS, EMPTY).text)
         self.assertIn("هنوز راه‌اندازی نشده است", route_message(texts.BTN_FREE_CREDIT, EMPTY).text)
         self.assertIn("به‌زودی اضافه می‌شوند", route_message(texts.BTN_SAMPLES, EMPTY).text)
 
-    def test_each_button_has_its_own_reply(self):
-        buttons = [b for row in texts.MENU_ROWS for b in row]
+    def test_static_buttons_have_distinct_replies(self):
+        buttons = [
+            texts.BTN_CREATE_IMAGE,
+            texts.BTN_FREE_CREDIT,
+            texts.BTN_SAMPLES,
+            texts.BTN_SUPPORT,
+            texts.BTN_GROUP,
+            texts.BTN_CHANNEL,
+        ]
         replies = {route_message(b, FILLED).text for b in buttons}
         self.assertEqual(len(replies), len(buttons))
 

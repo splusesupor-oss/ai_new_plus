@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
-"""آزمون یکپارچه هندلرها با بات جعلی — بدون شبکه و بدون ارسال پیام واقعی.
+"""آزمون یکپارچه هندلرهای پایه با بات جعلی — بدون شبکه و بدون پیام واقعی.
 
 پیام‌ها با همان مدل‌های واقعی کتابخانه aiosplus ساخته می‌شوند و از
 مسیر واقعی Dispatcher عبور می‌کنند؛ فقط لایه ارسال (بات) جعلی است.
+فرایند کامل سفارش ویدیو در test_video_orders.py پوشش داده شده است.
 """
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,45 +17,73 @@ from aiosplus.types import Chat, Message, Update, User
 from config import Settings
 from handlers import build_dispatcher
 from keyboards import keyboard_to_dict
+from storage import Storage
 
 SETTINGS = Settings(bot_token="test-token-not-real")
 
 
 class FakeBot:
-    """به‌جای Bot واقعی؛ فقط فراخوانی‌های send_message را ثبت می‌کند."""
+    """به‌جای Bot واقعی؛ همه فراخوانی‌های ارسال را فقط ثبت می‌کند."""
 
     _me = None  # فیلتر Command هنگام وجود @mention به آن سر می‌زند
 
     def __init__(self):
         self.sent = []
+        self.photos = []
+        self.videos = []
+        self.callback_answers = []
 
     async def send_message(self, chat_id, text, reply_markup=None, **kwargs):
-        self.sent.append({"chat_id": chat_id, "text": text, "reply_markup": reply_markup})
+        self.sent.append(
+            {"chat_id": chat_id, "text": text, "reply_markup": reply_markup, **kwargs}
+        )
         return None
 
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **kwargs):
+        self.photos.append(
+            {"chat_id": chat_id, "photo": photo, "caption": caption, "reply_markup": reply_markup}
+        )
+        return None
 
-def make_update(text, update_id=1):
+    async def send_video(self, chat_id, video, caption=None, reply_markup=None, **kwargs):
+        self.videos.append({"chat_id": chat_id, "video": video, "caption": caption})
+        return None
+
+    async def answer_callback_query(self, callback_query_id, text=None, show_alert=None, **kwargs):
+        self.callback_answers.append({"id": callback_query_id, "text": text})
+        return True
+
+
+def make_update(text, update_id=1, user_id=456, chat_id=123):
     message = Message(
         message_id=update_id,
         date=1700000000,
-        chat=Chat(id=123, type="private"),
-        from_user=User(id=456, is_bot=False, first_name="تست"),
+        chat=Chat(id=chat_id, type="private"),
+        from_user=User(id=user_id, is_bot=False, first_name="تست"),
         text=text,
     )
     return Update(update_id=update_id, message=message)
 
 
 class HandlersTest(unittest.IsolatedAsyncioTestCase):
-    async def _dispatch(self, text):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.storage = Storage(Path(self._tmp.name) / "test.db")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    async def _dispatch(self, text, user_id=456, chat_id=123):
         bot = FakeBot()
-        dp = build_dispatcher(SETTINGS)
-        handled = await dp.feed_update(bot, make_update(text))  # type: ignore[arg-type]
+        dp = build_dispatcher(SETTINGS, self.storage)
+        handled = await dp.feed_update(bot, make_update(text, user_id=user_id, chat_id=chat_id))  # type: ignore[arg-type]
         self.assertTrue(handled)
-        self.assertEqual(len(bot.sent), 1)
-        return bot.sent[0]
+        return bot
 
     async def test_start_sends_welcome_with_reply_keyboard(self):
-        sent = await self._dispatch("/start")
+        bot = await self._dispatch("/start")
+        self.assertEqual(len(bot.sent), 1)
+        sent = bot.sent[0]
         self.assertEqual(sent["text"], texts.WELCOME_TEXT)
         data = keyboard_to_dict(sent["reply_markup"])
         rows = [[b["text"] for b in row] for row in data["keyboard"]]
@@ -63,26 +93,24 @@ class HandlersTest(unittest.IsolatedAsyncioTestCase):
     async def test_menu_command_and_persian_menu(self):
         for text in ("/menu", "منو"):
             with self.subTest(text=text):
-                sent = await self._dispatch(text)
-                self.assertEqual(sent["text"], texts.WELCOME_TEXT)
+                bot = await self._dispatch(text)
+                self.assertEqual(bot.sent[0]["text"], texts.WELCOME_TEXT)
 
-    async def test_buttons_via_dispatcher(self):
+    async def test_static_buttons_via_dispatcher(self):
         cases = {
             texts.BTN_CREATE_IMAGE: "بخش ساخت تصویر به‌زودی فعال می‌شود.",
-            texts.BTN_CREATE_VIDEO: "بخش ساخت ویدیو به‌زودی فعال می‌شود.",
-            texts.BTN_MY_ORDERS: "هنوز راه‌اندازی نشده است",
             texts.BTN_SAMPLES: "به‌زودی اضافه می‌شوند",
         }
         for btn, expected in cases.items():
             with self.subTest(btn=btn):
-                sent = await self._dispatch(btn)
-                self.assertIn(expected, sent["text"])
-                self.assertIsNotNone(sent["reply_markup"])  # کیبورد اصلی باقی می‌ماند
+                bot = await self._dispatch(btn)
+                self.assertIn(expected, bot.sent[0]["text"])
+                self.assertIsNotNone(bot.sent[0]["reply_markup"])  # کیبورد اصلی باقی می‌ماند
 
     async def test_unknown_text_gets_fallback_with_keyboard(self):
-        sent = await self._dispatch("متن ناشناخته")
-        self.assertEqual(sent["text"], texts.UNKNOWN_TEXT)
-        self.assertIsNotNone(sent["reply_markup"])
+        bot = await self._dispatch("متن ناشناخته")
+        self.assertEqual(bot.sent[0]["text"], texts.UNKNOWN_TEXT)
+        self.assertIsNotNone(bot.sent[0]["reply_markup"])
 
 
 if __name__ == "__main__":

@@ -31,6 +31,13 @@ class Settings:
     support_contact: str | None = None
     group_url: str | None = None
     channel_url: str | None = None
+    # مدیر ربات: شناسه عددی چت/حساب مدیر در سروش‌پلاس (نه شناسه شش‌رقمی داخلی)
+    admin_chat_id: str | None = None
+    # اطلاعات پرداخت: فقط از .env خوانده می‌شود و در کد/GitHub قرار نمی‌گیرد
+    payment_card_number: str | None = None
+    payment_card_holder: str | None = None
+    # مسیر فایل محلی تصویر راهنمای پرداخت (اختیاری)
+    payment_guide_image: str | None = None
 
     @classmethod
     def from_environ(cls, environ: Mapping[str, str] | None = None) -> "Settings":
@@ -50,4 +57,8 @@ class Settings:
             support_contact=_clean(env.get("SUPPORT_CONTACT")),
             group_url=_clean(env.get("FOX_GROUP_URL")),
             channel_url=_clean(env.get("FOX_CHANNEL_URL")),
+            admin_chat_id=_clean(env.get("ADMIN_CHAT_ID")),
+            payment_card_number=_clean(env.get("PAYMENT_CARD_NUMBER")),
+            payment_card_holder=_clean(env.get("PAYMENT_CARD_HOLDER")),
+            payment_guide_image=_clean(env.get("PAYMENT_GUIDE_IMAGE")),
         )

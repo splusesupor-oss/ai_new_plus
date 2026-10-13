@@ -7,7 +7,8 @@
     python main.py
 
 توکن فقط از متغیر محیطی BOT_TOKEN در فایل .env خوانده می‌شود و
-هرگز در لاگ چاپ نمی‌شود. در این مرحله فقط منوی اصلی فعال است.
+هرگز در لاگ چاپ نمی‌شود. منوی اصلی و فرایند سفارش ساخت ویدیو فعال است؛
+داده‌ها در data/bot.db می‌مانند و با ری‌استارت پاک نمی‌شوند.
 """
 from __future__ import annotations
 
@@ -55,6 +56,7 @@ async def _run() -> int:
 
     from config import Settings
     from handlers import build_dispatcher
+    from storage import Storage
 
     try:
         settings = Settings.from_environ()
@@ -62,8 +64,20 @@ async def _run() -> int:
         print(f"❌ {exc}", file=sys.stderr)
         return 2
 
+    if not settings.admin_chat_id:
+        logging.warning(
+            "ADMIN_CHAT_ID در .env تنظیم نشده است؛ رسیدها در صف بررسی می‌مانند "
+            "اما برای مدیر ارسال نمی‌شوند."
+        )
+    if not settings.payment_card_number or not settings.payment_card_holder:
+        logging.warning(
+            "اطلاعات پرداخت (PAYMENT_CARD_NUMBER / PAYMENT_CARD_HOLDER) در .env "
+            "تنظیم نشده است؛ مرحله پرداخت به کاربران اطلاع می‌دهد."
+        )
+
+    storage = Storage(BASE_DIR / "data" / "bot.db")
     bot = Bot(token=settings.bot_token)
-    dp = build_dispatcher(settings)
+    dp = build_dispatcher(settings, storage)
 
     # بررسی توکن و اتصال قبل از شروع دریافت پیام‌ها
     logging.info("در حال اتصال به سروش‌پلاس و بررسی توکن ربات...")
