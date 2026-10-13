@@ -22,6 +22,22 @@ from typing import Iterator
 CODE_MIN = 100000
 CODE_MAX = 999999
 
+DAILY_FREE_CREDIT = 50
+IMAGE_ORDER_COST = 10
+
+
+def tehran_today():
+    """تاریخ امروز به وقت تهران (ریست اعتبار ساعت ۰۰:۰۰ تهران)."""
+    from datetime import datetime, timedelta, timezone
+
+    try:
+        from zoneinfo import ZoneInfo
+
+        return datetime.now(ZoneInfo("Asia/Tehran")).date().isoformat()
+    except Exception:  # در نبود tzdata، تهران ثابت UTC+3:30 است
+        tz = timezone(timedelta(hours=3, minutes=30))
+        return datetime.now(tz).date().isoformat()
+
 STATUS_DRAFT = "draft"
 STATUS_AWAITING_RECEIPT = "awaiting_receipt"
 STATUS_PENDING_REVIEW = "pending_review"
@@ -61,6 +77,8 @@ class UserRecord:
     username: str | None = None  # یوزرنیم سروش‌پلاس، اگر داشته باشد
     display_name: str | None = None  # نام نمایشی (جایگزین یوزرنیم)
     is_blocked: bool = False
+    credit_balance: int = DAILY_FREE_CREDIT
+    credit_date: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,6 +97,10 @@ class Order:
     request_text: str | None = None  # متن درخواست کاربر یا توضیح عکس
     request_photo_file_id: str | None = None
     delivered_video_file_id: str | None = None
+    service: str = "video"  # video | image
+    image_mode: str | None = None  # gen | edit | face
+    credit_cost: int = 0
+    delivered_file_id: str | None = None
 
 
 class Storage:
@@ -146,12 +168,18 @@ class Storage:
                     "username": "TEXT",
                     "display_name": "TEXT",
                     "is_blocked": "INTEGER NOT NULL DEFAULT 0",
+                    "credit_balance": "INTEGER NOT NULL DEFAULT 50",
+                    "credit_date": "TEXT",
                 },
                 "orders": {
                     "order_type": "TEXT",
                     "request_text": "TEXT",
                     "request_photo_file_id": "TEXT",
                     "delivered_video_file_id": "TEXT",
+                    "service": "TEXT NOT NULL DEFAULT 'video'",
+                    "image_mode": "TEXT",
+                    "credit_cost": "INTEGER NOT NULL DEFAULT 0",
+                    "delivered_file_id": "TEXT",
                 },
             }.items():
                 existing = {
@@ -250,7 +278,44 @@ class Storage:
             username=row["username"] if "username" in keys else None,
             display_name=row["display_name"] if "display_name" in keys else None,
             is_blocked=bool(row["is_blocked"]) if "is_blocked" in keys else False,
+            credit_balance=(
+                int(row["credit_balance"]) if "credit_balance" in keys and row["credit_balance"] is not None else DAILY_FREE_CREDIT
+            ),
+            credit_date=row["credit_date"] if "credit_date" in keys else None,
         )
+
+    # ---------- اعتبار رایگان روزانه ----------
+    def ensure_daily_credit(self, user_key: str) -> int:
+        """موجودی امروز کاربر؛ با شروع روز تازه تهران، خودکار ۵۰ می‌شود."""
+        today = tehran_today()
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT credit_balance, credit_date FROM users WHERE user_key=?",
+                (str(user_key),),
+            ).fetchone()
+            if row is None:
+                return 0
+            if row["credit_date"] != today:
+                conn.execute(
+                    "UPDATE users SET credit_balance=?, credit_date=? WHERE user_key=?",
+                    (DAILY_FREE_CREDIT, today, str(user_key)),
+                )
+                return DAILY_FREE_CREDIT
+            return int(row["credit_balance"])
+
+    def add_credit(self, user_key: str, amount: int) -> int:
+        """برگرداندن اعتبار (مثلاً رد شدن سفارش تصویر توسط مدیر)."""
+        self.ensure_daily_credit(user_key)
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET credit_balance=credit_balance+? WHERE user_key=?",
+                (amount, str(user_key)),
+            )
+            row = conn.execute(
+                "SELECT credit_balance FROM users WHERE user_key=?", (str(user_key),)
+            ).fetchone()
+            return int(row["credit_balance"]) if row else 0
+
 
     def list_users(self, limit: int = 100000) -> list[UserRecord]:
         """همه اعضای ثبت‌شده ربات (برای دستور اعضا و اطلاع‌رسانی همگانی)."""
@@ -430,6 +495,55 @@ class Storage:
             )
         return self.get_order(order_id)
 
+    def create_image_order(
+        self,
+        user_key: str,
+        image_mode: str,
+        model: str,
+        request_text: str,
+        request_photo_file_id: str | None = None,
+    ) -> Order | None:
+        """سفارش تصویر را فقط اگر اعتبار کافی باشد ثبت و ۱۰ اعتبار کم می‌کند.
+
+        کسر اعتبار و ثبت سفارش اتمیک است؛ موجودی هرگز منفی نمی‌شود و
+        سفارش بدون اعتبار ساخته نمی‌شود. None یعنی اعتبار کافی نیست.
+        """
+        self.ensure_daily_credit(user_key)
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE users SET credit_balance=credit_balance-? WHERE user_key=?"
+                " AND credit_balance>=?",
+                (IMAGE_ORDER_COST, str(user_key), IMAGE_ORDER_COST),
+            )
+            if cur.rowcount != 1:
+                return None
+            cur = conn.execute(
+                "INSERT INTO orders(user_key, model, status, service, image_mode,"
+                " request_text, request_photo_file_id, credit_cost, created_at, updated_at)"
+                " VALUES(?,?, 'pending_review', 'image', ?, ?, ?, ?, ?, ?)",
+                (
+                    str(user_key),
+                    model,
+                    image_mode,
+                    request_text,
+                    request_photo_file_id,
+                    IMAGE_ORDER_COST,
+                    _now(),
+                    _now(),
+                ),
+            )
+            order_id = int(cur.lastrowid)
+        return self.get_order(order_id)
+
+    def complete_image_delivery(self, order_id: int, file_id: str) -> Order | None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE orders SET delivered_file_id=?, status='completed', updated_at=?"
+                " WHERE id=? AND service='image'",
+                (file_id, _now(), order_id),
+            )
+        return self.get_order(order_id)
+
     @staticmethod
     def _to_order(row: sqlite3.Row) -> Order:
         keys = row.keys()
@@ -452,6 +566,10 @@ class Storage:
             delivered_video_file_id=(
                 row["delivered_video_file_id"] if "delivered_video_file_id" in keys else None
             ),
+            service=row["service"] if "service" in keys and row["service"] else "video",
+            image_mode=row["image_mode"] if "image_mode" in keys else None,
+            credit_cost=int(row["credit_cost"]) if "credit_cost" in keys and row["credit_cost"] is not None else 0,
+            delivered_file_id=row["delivered_file_id"] if "delivered_file_id" in keys else None,
         )
 
     # ---------- تنظیمات دائمی (مثل ویدیوی پیش‌فرض) -------

@@ -254,12 +254,24 @@ def user_orders_text(orders: list[Order], user: UserRecord) -> str:
         return header + "\nهنوز سفارشی ثبت نکرده‌اید. از منوی اصلی «ساخت ویدیو» را انتخاب کنید."
     lines = [header]
     for order in orders:
-        lines.append(
-            "\n"
-            f"🧾 سفارش شماره {order.id}\n"
-            f"مدل: {order.model or '—'} | مدت: {duration_label(order.duration_seconds)}\n"
-            f"مبلغ: {format_amount(order.amount_toman)}\n"
-            f"وضعیت: {STATUS_LABELS.get(order.status, order.status)}\n"
-            f"تاریخ: {order.created_at}"
-        )
+        if getattr(order, "service", "video") == "image":
+            from image_orders import IMAGE_MODES
+
+            lines.append(
+                "\n"
+                f"🖼 سفارش تصویر شماره {order.id}\n"
+                f"نوع: {IMAGE_MODES.get(order.image_mode or '', '—')} | مدل: {order.model or '—'}\n"
+                f"هزینه: {order.credit_cost} اعتبار\n"
+                f"وضعیت: {STATUS_LABELS.get(order.status, order.status)}\n"
+                f"تاریخ: {order.created_at}"
+            )
+        else:
+            lines.append(
+                "\n"
+                f"🧾 سفارش شماره {order.id}\n"
+                f"مدل: {order.model or '—'} | مدت: {duration_label(order.duration_seconds)}\n"
+                f"مبلغ: {format_amount(order.amount_toman)}\n"
+                f"وضعیت: {STATUS_LABELS.get(order.status, order.status)}\n"
+                f"تاریخ: {order.created_at}"
+            )
     return "\n".join(lines)

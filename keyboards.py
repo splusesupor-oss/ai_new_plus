@@ -20,6 +20,7 @@ from aiosplus.types import (
     ReplyKeyboardMarkup,
 )
 
+import image_orders
 import video_orders
 from texts import MENU_ROWS
 
@@ -132,6 +133,44 @@ def build_broadcast_keyboard() -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text=video_orders.BROADCAST_CANCEL_TEXT, callback_data="vbc:cancel"
+                ),
+            ]
+        ]
+    )
+
+
+def build_image_mode_keyboard() -> InlineKeyboardMarkup:
+    """ساخت تصویر: تولید / ویرایش / تغییر چهره."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=title, callback_data=f"it:{key}")]
+            for key, title in image_orders.IMAGE_MODES.items()
+        ]
+    )
+
+
+def build_image_model_keyboard() -> InlineKeyboardMarkup:
+    """مدل‌های ساخت تصویر."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=model, callback_data=f"im:{i}")]
+            for i, model in enumerate(image_orders.IMAGE_MODELS)
+        ]
+    )
+
+
+def build_image_admin_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    """مدیر روی سفارش تصویر: تحویل تصویر نهایی یا رد (بدون مرحله پرداخت)."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=image_orders.DELIVER_IMAGE_BUTTON_TEXT,
+                    callback_data=f"idl:{order_id}",
+                ),
+                InlineKeyboardButton(
+                    text=image_orders.REJECT_IMAGE_BUTTON_TEXT,
+                    callback_data=f"irj:{order_id}",
                 ),
             ]
         ]

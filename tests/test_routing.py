@@ -37,12 +37,9 @@ class MenuCommandsTest(unittest.TestCase):
 
 class ButtonsTest(unittest.TestCase):
     def test_coming_soon_buttons_exact(self):
-        self.assertEqual(
-            route_message(texts.BTN_CREATE_IMAGE, EMPTY).text,
-            "بخش ساخت تصویر به‌زودی فعال می‌شود.",
-        )
-        # «ساخت ویدیو» و «سفارش‌های من» دیگر متن ثابت ندارند و در handlers
-        # به‌صورت واقعی پاسخ داده می‌شوند (در test_video_orders پوشش دارند).
+        # دکمه‌های واقعی (ویدیو، تصویر، اعتبار، سفارش‌ها) متن ثابت ندارند و
+        # در handlers پاسخ داده می‌شوند (در test_video_orders و test_image_orders).
+        pass
 
     def test_not_launched_buttons(self):
         self.assertIn("هنوز راه‌اندازی نشده است", route_message(texts.BTN_FREE_CREDIT, EMPTY).text)
@@ -50,7 +47,6 @@ class ButtonsTest(unittest.TestCase):
 
     def test_static_buttons_have_distinct_replies(self):
         buttons = [
-            texts.BTN_CREATE_IMAGE,
             texts.BTN_FREE_CREDIT,
             texts.BTN_SAMPLES,
             texts.BTN_SUPPORT,

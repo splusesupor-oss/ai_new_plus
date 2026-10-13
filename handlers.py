@@ -18,6 +18,7 @@ from aiosplus import Bot, Dispatcher
 from aiosplus.filters import Command, Text
 from aiosplus.types import CallbackQuery, Message
 
+import image_orders as io
 import texts
 import video_orders as vo
 from bot_logic import route_message
@@ -27,6 +28,9 @@ from keyboards import (
     build_broadcast_keyboard,
     build_deliver_keyboard,
     build_duration_keyboard,
+    build_image_admin_keyboard,
+    build_image_mode_keyboard,
+    build_image_model_keyboard,
     build_main_keyboard,
     build_model_keyboard,
     build_order_type_keyboard,
@@ -319,7 +323,8 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             return False
         state = store.get_flow_state(_user_key(message))
         return state is not None and (
-            state[0].startswith("admin_wait_delivery_video")
+            state[0].startswith("admin_wait_delivery_photo")
+            or state[0].startswith("admin_wait_delivery_video")
             or state[0]
             in {
                 "admin_wait_video",
@@ -332,6 +337,36 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     async def admin_flow_continue(message: Message, bot: Bot) -> None:
         key = _user_key(message)
         state, payload = store.get_flow_state(key) or ("", None)
+        if state.startswith("admin_wait_delivery_photo"):
+            try:
+                order_id = int(state.rsplit(":", 1)[1])
+            except (ValueError, IndexError):
+                store.clear_flow_state(key)
+                return
+            if not message.photo:
+                await message.answer("لطفاً تصویر نهایی سفارش را ارسال کنید (عکس).")
+                return
+            order = store.get_order(order_id)
+            target = store.get_user(order.user_key) if order else None
+            if order is None or target is None or not target.chat_id:
+                store.clear_flow_state(key)
+                await message.answer("کاربر صاحب سفارش پیدا نشد؛ تحویل ممکن نیست.")
+                return
+            photo = max(message.photo, key=lambda p: (p.file_size or 0, p.width * p.height))
+            try:
+                await bot.send_photo(
+                    chat_id=int(target.chat_id),
+                    photo=photo.file_id,
+                    caption=f"🖼 تصویر سفارش شما آماده شد!\nشماره سفارش: {order_id}",
+                )
+            except Exception:
+                logger.exception("تحویل تصویر سفارش %s ممکن نشد", order_id)
+                await message.answer("ارسال تصویر به کاربر ناموفق بود؛ دوباره تلاش کنید.")
+                return
+            store.complete_image_delivery(order_id, photo.file_id)
+            store.clear_flow_state(key)
+            await message.answer(f"✅ تصویر سفارش شماره {order_id} برای کاربر ارسال و سفارش تکمیل شد.")
+            return
         if state.startswith("admin_wait_delivery_video"):
             # مدیر در حال تحویل ویدیوی نهایی یک سفارش است
             try:
@@ -444,6 +479,113 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             reply_markup=build_model_keyboard(),
         )
 
+    # ---------- ساخت تصویر و اعتبار رایگان ----------
+    @dp.message(Text(text=texts.BTN_CREATE_IMAGE))
+    async def start_image_order(message: Message, bot: Bot) -> None:
+        ensure_user(message)
+        store.ensure_daily_credit(_user_key(message))
+        hero = Path(__file__).resolve().parent / "assets" / "image_hero.jpg"
+        if hero.is_file():
+            try:
+                await bot.send_photo(chat_id=message.chat.id, photo=str(hero))
+            except Exception:
+                logger.exception("ارسال تصویر شروع ساخت تصویر ممکن نشد")
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=io.IMAGE_INTRO_HTML,
+            parse_mode="HTML",
+            reply_markup=build_image_mode_keyboard(),
+        )
+
+    @dp.message(Text(text=texts.BTN_FREE_CREDIT))
+    async def free_credit(message: Message, bot: Bot) -> None:
+        user = ensure_user(message)
+        balance = store.ensure_daily_credit(user.user_key)
+        img = Path(__file__).resolve().parent / "assets" / "free_credit.jpg"
+        text = io.balance_text(balance)
+        if img.is_file():
+            try:
+                await bot.send_photo(chat_id=message.chat.id, photo=str(img), caption=text)
+                return
+            except Exception:
+                logger.exception("ارسال تصویر اعتبار رایگان ممکن نشد؛ متن ارسال می‌شود")
+        await message.answer(text, reply_markup=build_main_keyboard())
+
+    async def _submit_image_order(
+        bot: Bot,
+        chat_id: int,
+        user_key: str,
+        mode: str,
+        model: str,
+        prompt: str,
+        photo_file_id: str | None,
+    ) -> None:
+        order = store.create_image_order(user_key, mode, model, prompt, photo_file_id)
+        store.clear_flow_state(user_key)
+        if order is None:
+            await bot.send_message(chat_id=chat_id, text=io.NO_CREDIT_TEXT)
+            return
+        balance = store.ensure_daily_credit(user_key)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=(
+                f"✅ سفارش تصویر شماره {order.id} ثبت و برای مدیریت ارسال شد.\n"
+                f"هزینه: {order.credit_cost} اعتبار | موجودی شما: {balance} اعتبار\n"
+                "تصویر نهایی پس از آماده شدن همین‌جا برایتان ارسال می‌شود."
+            ),
+            reply_markup=build_main_keyboard(),
+        )
+        await _notify_admin_image_order(bot, order)
+
+    async def _notify_admin_image_order(bot: Bot, order) -> None:
+        if not settings.admin_chat_id:
+            logger.error(
+                "ADMIN_CHAT_ID تنظیم نشده؛ سفارش تصویر %s در صف مدیر باقی ماند.", order.id
+            )
+            return
+        user = store.get_user(order.user_key)
+        balance = store.ensure_daily_credit(order.user_key)
+        details = io.image_admin_html(order, user, balance)
+        try:
+            if order.request_photo_file_id:
+                await bot.send_photo(
+                    chat_id=settings.admin_chat_id,
+                    photo=order.request_photo_file_id,
+                    caption=details[:1000],
+                    parse_mode="HTML",
+                    reply_markup=build_image_admin_keyboard(order.id),
+                )
+            else:
+                await bot.send_message(
+                    chat_id=settings.admin_chat_id,
+                    text=details,
+                    parse_mode="HTML",
+                    reply_markup=build_image_admin_keyboard(order.id),
+                )
+        except Exception:
+            logger.exception("ارسال سفارش تصویر %s برای مدیر ممکن نشد", order.id)
+
+    def _img_prompt_filter(message: Message, **_kw) -> bool:
+        if _is_admin(message):
+            return False
+        state = store.get_flow_state(_user_key(message))
+        return state is not None and state[0] == "img_wait_prompt"
+
+    @dp.message(_img_prompt_filter)
+    async def user_image_prompt(message: Message, bot: Bot) -> None:
+        key = _user_key(message)
+        _state, payload = store.get_flow_state(key) or ("", None)
+        mode, _, model = (payload or "").partition("|")
+        text = (message.text or "").strip()
+        if text in (texts.MENU_TEXT_COMMAND, "/start", "/menu", "لغو"):
+            store.clear_flow_state(key)
+            await _answer(message)
+            return
+        if not text or mode not in io.IMAGE_MODES or not model:
+            await message.answer(io.IMAGE_PROMPT_TEXT)
+            return
+        await _submit_image_order(bot, message.chat.id, key, mode, model, text, None)
+
     # ---------- ساخت ویدیو و سفارش‌های من ----------
     @dp.message(Text(text=texts.BTN_CREATE_VIDEO))
     async def start_video_order(message: Message, bot: Bot) -> None:
@@ -481,6 +623,23 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     async def on_photo(message: Message, bot: Bot) -> None:
         ensure_user(message)
         flow = store.get_flow_state(_user_key(message))
+        if flow is not None and flow[0] == "img_wait_photo":
+            mode, _, model = (flow[1] or "").partition("|")
+            caption = (message.caption or "").strip()
+            if not caption:
+                await message.answer(
+                    "عکس باید متن توضیحی داشته باشد؛ عکس را با توضیح در کپشن دوباره ارسال کنید."
+                )
+                return
+            photo = max(message.photo, key=lambda p: (p.file_size or 0, p.width * p.height))
+            if mode not in io.IMAGE_MODES or not model:
+                store.clear_flow_state(_user_key(message))
+                await message.answer("از «ساخت تصویر» دوباره شروع کنید.", reply_markup=build_main_keyboard())
+                return
+            await _submit_image_order(
+                bot, message.chat.id, _user_key(message), mode, model, caption, photo.file_id
+            )
+            return
         if flow is not None and flow[0].startswith("wait_order_photo"):
             # عکسِ درخواستیِ سفارش «ساخت ویدیو با عکس» + متن توضیحی در کپشن
             try:
@@ -564,6 +723,109 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     @dp.callback_query(_cb_blocked)
     async def blocked_callback_guard(callback: CallbackQuery, bot: Bot) -> None:
         await _cb_answer(bot, callback, vo.BLOCKED_TEXT, alert=True)
+
+    @dp.callback_query(Text(startswith="it:"))
+    async def on_image_mode_chosen(callback: CallbackQuery, bot: Bot) -> None:
+        mode = callback.data.split(":", 1)[1] if callback.data else ""
+        chat_id = callback.message.chat.id if callback.message else None
+        if mode not in io.IMAGE_MODES or chat_id is None:
+            await _cb_answer(bot, callback, "گزینه نامعتبر است.", alert=True)
+            return
+        user_key = _cb_user_key(callback)
+        store.get_or_create_user(
+            user_key,
+            chat_id=str(chat_id),
+            username=callback.from_user.username,
+            display_name=getattr(callback.from_user, "full_name", None),
+        )
+        store.set_flow_state(user_key, "img_wait_model", mode)
+        await _cb_answer(bot, callback, f"«{io.IMAGE_MODES[mode]}» انتخاب شد.")
+        await bot.send_message(
+            chat_id=chat_id,
+            text="مدل ساخت تصویر را انتخاب کنید:",
+            reply_markup=build_image_model_keyboard(),
+        )
+
+    @dp.callback_query(Text(startswith="im:"))
+    async def on_image_model_chosen(callback: CallbackQuery, bot: Bot) -> None:
+        chat_id = callback.message.chat.id if callback.message else None
+        try:
+            model = io.IMAGE_MODELS[int(callback.data.split(":", 1)[1])]
+        except (ValueError, IndexError):
+            model = ""
+        user_key = _cb_user_key(callback)
+        flow = store.get_flow_state(user_key)
+        mode = flow[1] if flow and flow[0] == "img_wait_model" else None
+        if chat_id is None or not model or mode not in io.IMAGE_MODES:
+            await _cb_answer(bot, callback, "اول از «ساخت تصویر» نحوه تولید را انتخاب کنید.", alert=True)
+            return
+        await _cb_answer(bot, callback, f"مدل {model} انتخاب شد.")
+        if mode == "gen":
+            store.set_flow_state(user_key, "img_wait_prompt", f"{mode}|{model}")
+            await bot.send_message(chat_id=chat_id, text=io.IMAGE_PROMPT_TEXT)
+        else:
+            store.set_flow_state(user_key, "img_wait_photo", f"{mode}|{model}")
+            await bot.send_message(chat_id=chat_id, text=io.IMAGE_PHOTO_PROMPT_TEXT)
+
+    @dp.callback_query(Text(startswith="idl:"))
+    async def on_image_deliver_clicked(callback: CallbackQuery, bot: Bot) -> None:
+        chat_id = callback.message.chat.id if callback.message else 0
+        if not is_admin_ids(_cb_user_key(callback), chat_id, callback.from_user.username):
+            await _cb_answer(bot, callback, vo.NOT_ADMIN_TEXT, alert=True)
+            return
+        try:
+            order_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            order_id = -1
+        order = store.get_order(order_id)
+        if order is None or order.service != "image" or order.status not in (
+            STATUS_PENDING_REVIEW,
+            STATUS_PROCESSING,
+        ):
+            await _cb_answer(bot, callback, "این سفارش تصویر آماده تحویل نیست.", alert=True)
+            return
+        store.update_status(order_id, STATUS_PROCESSING)
+        store.set_flow_state(
+            _cb_user_key(callback), f"admin_wait_delivery_photo:{order_id}"
+        )
+        await _cb_answer(bot, callback)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"🖼 تصویر نهایی سفارش شماره {order_id} را ارسال کنید تا برای کاربر فرستاده شود.",
+        )
+
+    @dp.callback_query(Text(startswith="irj:"))
+    async def on_image_reject_clicked(callback: CallbackQuery, bot: Bot) -> None:
+        chat_id = callback.message.chat.id if callback.message else 0
+        if not is_admin_ids(_cb_user_key(callback), chat_id, callback.from_user.username):
+            await _cb_answer(bot, callback, vo.NOT_ADMIN_TEXT, alert=True)
+            return
+        try:
+            order_id = int(callback.data.split(":", 1)[1])
+        except (ValueError, IndexError):
+            order_id = -1
+        order = store.get_order(order_id)
+        if order is None or order.service != "image" or order.status not in (
+            STATUS_PENDING_REVIEW,
+            STATUS_PROCESSING,
+        ):
+            await _cb_answer(bot, callback, "این سفارش قبلاً بررسی شده است.", alert=True)
+            return
+        store.update_status(order_id, STATUS_REJECTED)
+        balance = store.add_credit(order.user_key, order.credit_cost)
+        await _cb_answer(bot, callback, "سفارش تصویر رد و اعتبار برگردانده شد ❌")
+        owner = store.get_user(order.user_key)
+        if owner and owner.chat_id:
+            try:
+                await bot.send_message(
+                    chat_id=int(owner.chat_id),
+                    text=(
+                        f"❌ سفارش تصویر شماره {order_id} انجام نشد.\n"
+                        f"{order.credit_cost} اعتبار به شما برگردانده شد. موجودی فعلی: {balance}"
+                    ),
+                )
+            except Exception:
+                logger.exception("اطلاع رد سفارش تصویر به کاربر ممکن نشد")
 
     @dp.callback_query(Text(startswith="vt:"))
     async def on_order_type_chosen(callback: CallbackQuery, bot: Bot) -> None:
@@ -778,8 +1040,6 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     @dp.message(
         Text(
             text=[
-                texts.BTN_CREATE_IMAGE,
-                texts.BTN_FREE_CREDIT,
                 texts.BTN_SAMPLES,
                 texts.BTN_SUPPORT,
                 texts.BTN_GROUP,

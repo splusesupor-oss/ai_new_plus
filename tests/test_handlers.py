@@ -98,7 +98,6 @@ class HandlersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_static_buttons_via_dispatcher(self):
         cases = {
-            texts.BTN_CREATE_IMAGE: "بخش ساخت تصویر به‌زودی فعال می‌شود.",
             texts.BTN_SAMPLES: "به‌زودی اضافه می‌شوند",
         }
         for btn, expected in cases.items():
