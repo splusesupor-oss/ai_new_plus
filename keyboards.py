@@ -47,6 +47,16 @@ def keyboard_to_dict(keyboard: ReplyKeyboardMarkup) -> dict[str, Any]:
 # این‌ها InlineKeyboardMarkup واقعی Bot API سروش‌پلاس‌اند و روی همان پیام
 # نمایش داده می‌شوند؛ با کلیک، callback_data برای ربات ارسال می‌شود.
 
+def build_order_type_keyboard() -> InlineKeyboardMarkup:
+    """ابتدای سفارش: ساخت ویدیو با متن یا با عکس."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=title, callback_data=f"vt:{key}")]
+            for key, title in video_orders.ORDER_TYPES.items()
+        ]
+    )
+
+
 def build_model_keyboard() -> InlineKeyboardMarkup:
     """مرحله ۱: سه مدل ویدیوساز، هرکدام یک دکمه مستقل."""
     return InlineKeyboardMarkup(
@@ -93,6 +103,36 @@ def build_admin_order_keyboard(order_id: int) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(text="✅ تأیید پرداخت", callback_data=f"va:{order_id}"),
                 InlineKeyboardButton(text="❌ رد پرداخت", callback_data=f"vrj:{order_id}"),
+            ]
+        ]
+    )
+
+
+def build_deliver_keyboard(order_id: int) -> InlineKeyboardMarkup:
+    """تحویل سفارش تأییدشده: مدیر با این دکمه ویدیوی نهایی را می‌فرستد."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=video_orders.DELIVER_BUTTON_TEXT,
+                    callback_data=f"vdl:{order_id}",
+                )
+            ]
+        ]
+    )
+
+
+def build_broadcast_keyboard() -> InlineKeyboardMarkup:
+    """پیش‌نمایش اطلاع‌رسانی: فقط با تأیید مدیر برای همه ارسال می‌شود."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=video_orders.BROADCAST_CONFIRM_TEXT, callback_data="vbc:confirm"
+                ),
+                InlineKeyboardButton(
+                    text=video_orders.BROADCAST_CANCEL_TEXT, callback_data="vbc:cancel"
+                ),
             ]
         ]
     )

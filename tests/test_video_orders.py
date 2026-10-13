@@ -174,6 +174,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ساخت ویدیو با مدل هوش مصنوعی روباه", intro["text"])
         self.assertIsNotNone(intro["reply_markup"].inline_keyboard)
 
+        await self._send(make_callback("vt:text", update_id=21))
+        await self._send(make_update("متن نمونه برای سفارش ویدیو " * 6, update_id=22))
         await self._send(make_callback("vm:mfox", update_id=3))
         await self._send(make_callback("vd:20", update_id=4))
         payment = self.bot.sent[-1]
@@ -230,6 +232,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         dp = build_dispatcher(Settings(bot_token="x", admin_chat_id="999"), self.storage)
         bot = FakeBot()
         await dp.feed_update(bot, make_update(texts.BTN_CREATE_VIDEO, update_id=30))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_callback("vt:text", update_id=33))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_update("متن نمونه برای سفارش ویدیو " * 6, update_id=34))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vm:mplus", update_id=31))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vd:10", update_id=32))  # type: ignore[arg-type]
         self.assertIn("هنوز توسط مدیر تنظیم نشده است", bot.sent[-1]["text"])
@@ -247,6 +251,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         dp = build_dispatcher(settings, self.storage)
         bot = FakeBot()
         await dp.feed_update(bot, make_update(texts.BTN_CREATE_VIDEO, update_id=80))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_callback("vt:text", update_id=83))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_update("متن نمونه برای سفارش ویدیو " * 6, update_id=84))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vm:mplus", update_id=81))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vd:30", update_id=82))  # type: ignore[arg-type]
         # تصویر راهنما همراه متن پرداخت و دکمه رسید ارسال شده است
@@ -270,6 +276,8 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         )
         bot = FakeBot()
         await dp.feed_update(bot, make_update(texts.BTN_CREATE_VIDEO, update_id=90))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_callback("vt:text", update_id=93))  # type: ignore[arg-type]
+        await dp.feed_update(bot, make_update("متن نمونه برای سفارش ویدیو " * 6, update_id=94))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vm:mfox", update_id=91))  # type: ignore[arg-type]
         await dp.feed_update(bot, make_callback("vd:10", update_id=92))  # type: ignore[arg-type]
         self.assertEqual(len(bot.photos), 1)

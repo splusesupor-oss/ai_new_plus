@@ -50,6 +50,30 @@ ADMIN_SET_VIDEO_COMMAND = "تنظیم ویدیو"
 ADMIN_DELETE_VIDEO_COMMAND = "حذف ویدیو"
 ADMIN_SET_VIDEO_TEXT_COMMAND = "تنظیم متن ویدیو"
 ADMIN_PENDING_COMMAND = "سفارش‌های در انتظار"
+ADMIN_MEMBERS_COMMAND = "اعضا"
+ADMIN_BROADCAST_COMMAND = "اطلاع رسانی"
+ADMIN_READY_COMMAND = "تحویل سفارش‌ها"
+
+# نوع سفارش: کلید -> عنوان دکمه و برچسب نمایشی
+ORDER_TYPES = {
+    "text": "ساخت ویدیو با متن",
+    "photo": "ساخت ویدیو با عکس",
+}
+MIN_ORDER_TEXT_LENGTH = 100
+
+TYPE_BUTTON_TEXT = "نوع ساخت ویدیو را انتخاب کنید:"
+ORDER_TEXT_PROMPT = (
+    "✍️ متن موردنظرتان برای ساخت ویدیو را ارسال کنید.\n"
+    f"متن باید حداقل {MIN_ORDER_TEXT_LENGTH} کاراکتر باشد."
+)
+ORDER_PHOTO_PROMPT = (
+    "🖼 عکس موردنظرتان را همراه با یک متن توضیحی (در کپشن عکس) ارسال کنید.\n"
+    "عکس بدون متن توضیحی ثبت نمی‌شود."
+)
+BLOCKED_TEXT = "⛔ حساب شما توسط مدیریت مسدود شده است و امکان استفاده از ربات را ندارید."
+DELIVER_BUTTON_TEXT = "🎬 ارسال ویدیو"
+BROADCAST_CONFIRM_TEXT = "✅ تأیید ارسال"
+BROADCAST_CANCEL_TEXT = "❌ لغو"
 
 DEFAULT_VIDEO_FILE_KEY = "default_video_file_id"
 DEFAULT_VIDEO_TEXT_KEY = "default_video_text"
@@ -58,6 +82,7 @@ DEFAULT_VIDEO_ENABLED_KEY = "default_video_enabled"
 VIDEO_INTRO_PLAIN = (
     "🎥 ساخت ویدیو با مدل هوش مصنوعی روباه\n"
     "\n"
+    "● نوع سفارش (با متن یا با عکس) را انتخاب کنید\n"
     "● مدل را انتخاب کنید\n"
     "● تایم ویدیو را انتخاب کنید\n"
     "● هزینه را پرداخت و رسید را ارسال کنید\n"
@@ -147,6 +172,65 @@ def order_summary(order: Order, user: UserRecord | None) -> str:
         f"وضعیت: {STATUS_LABELS.get(order.status, order.status)}\n"
         f"تاریخ ثبت: {order.created_at}"
     )
+
+
+def user_display(user: UserRecord | None) -> str:
+    """نام کاربر برای مدیر: اول یوزرنیم، اگر نداشت نام نمایشی."""
+    if user is None:
+        return "—"
+    if user.username:
+        return f"@{user.username.lstrip('@')}"
+    return user.display_name or user.first_name or "—"
+
+
+def order_type_label(order: Order) -> str:
+    return ORDER_TYPES.get(order.order_type or "", "—")
+
+
+def order_admin_html(order: Order, user: UserRecord | None, full_text: bool = True) -> str:
+    """جزئیات کامل سفارش برای مدیر با عنوان‌های Bold (HTML سازگار با API)."""
+    request_text = html.escape(order.request_text or "—")
+    if not full_text and len(request_text) > 350:
+        request_text = request_text[:350] + "…"
+    return (
+        f"<b>🧾 سفارش ویدیو شماره {order.id}</b>\n"
+        f"<b>نوع سفارش:</b> {html.escape(order_type_label(order))}\n"
+        f"<b>متن درخواست کاربر:</b>\n{request_text}\n"
+        f"<b>کاربر:</b> {html.escape(user_display(user))}\n"
+        f"<b>شناسه شش‌رقمی:</b> {html.escape(user.code if user else '—')}\n"
+        f"<b>شناسه حساب سروش‌پلاس:</b> {html.escape(order.user_key)}\n"
+        f"<b>مدل انتخابی:</b> {html.escape(order.model or '—')}\n"
+        f"<b>مدت ویدیو:</b> {duration_label(order.duration_seconds)}\n"
+        f"<b>مبلغ:</b> {format_amount(order.amount_toman)}\n"
+        f"<b>وضعیت:</b> {html.escape(STATUS_LABELS.get(order.status, order.status))}\n"
+        f"<b>تاریخ ثبت:</b> {html.escape(order.created_at)}"
+    )
+
+
+def broadcast_to_html(raw: str) -> str:
+    """تبدیل متن مدیر به HTML امن؛ بخش‌های **...** به Bold تبدیل می‌شوند.
+
+    مثال ورودی مدیر: سلام **اطلاعیه مهم** برای همه
+    """
+    import re
+
+    escaped = html.escape(raw.strip())
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", escaped, flags=re.S)
+
+
+def members_text(users: list[UserRecord]) -> str:
+    """متن دستور «اعضا» برای مدیر: تعداد کل + اطلاعات هر عضو."""
+    lines = [f"👥 اعضای ربات — تعداد کل: {len(users)} نفر\n"]
+    for u in users:
+        name = u.display_name or u.first_name or "—"
+        username = f"@{u.username.lstrip('@')}" if u.username else "بدون یوزرنیم"
+        blocked = " | 🚫 مسدود" if u.is_blocked else ""
+        lines.append(
+            f"\n<b>{html.escape(u.code)}</b> — {html.escape(name)} ({html.escape(username)})\n"
+            f"شناسه سروش‌پلاس: {html.escape(u.user_key)} | چت: {html.escape(u.chat_id or '—')}"
+            f"{blocked}\nشروع: {html.escape(u.created_at)}"
+        )
+    return "\n".join(lines)
 
 
 def user_orders_text(orders: list[Order], user: UserRecord) -> str:

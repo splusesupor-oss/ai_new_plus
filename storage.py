@@ -58,6 +58,9 @@ class UserRecord:
     chat_id: str | None
     first_name: str | None
     created_at: str
+    username: str | None = None  # یوزرنیم سروش‌پلاس، اگر داشته باشد
+    display_name: str | None = None  # نام نمایشی (جایگزین یوزرنیم)
+    is_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,10 @@ class Order:
     receipt_requested: bool
     created_at: str
     updated_at: str
+    order_type: str | None = None  # text | photo
+    request_text: str | None = None  # متن درخواست کاربر یا توضیح عکس
+    request_photo_file_id: str | None = None
+    delivered_video_file_id: str | None = None
 
 
 class Storage:
@@ -133,10 +140,36 @@ class Storage:
                 );
                 """
             )
+            # مهاجرت دیتابیس‌های قبلی: ستون‌های جدید بدون حذف داده‌های فعلی
+            for table, columns in {
+                "users": {
+                    "username": "TEXT",
+                    "display_name": "TEXT",
+                    "is_blocked": "INTEGER NOT NULL DEFAULT 0",
+                },
+                "orders": {
+                    "order_type": "TEXT",
+                    "request_text": "TEXT",
+                    "request_photo_file_id": "TEXT",
+                    "delivered_video_file_id": "TEXT",
+                },
+            }.items():
+                existing = {
+                    row["name"]
+                    for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                for col, col_type in columns.items():
+                    if col not in existing:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
 
     # ---------- کاربران و شناسه شش‌رقمی ----------
     def get_or_create_user(
-        self, user_key: str, chat_id: str | None = None, first_name: str | None = None
+        self,
+        user_key: str,
+        chat_id: str | None = None,
+        first_name: str | None = None,
+        username: str | None = None,
+        display_name: str | None = None,
     ) -> UserRecord:
         """کاربر را برمی‌گرداند و اگر اولین بار است، کد شش‌رقمی یکتا می‌سازد.
 
@@ -148,10 +181,20 @@ class Storage:
                 "SELECT * FROM users WHERE user_key=?", (user_key,)
             ).fetchone()
             if row is not None:
-                if chat_id and (row["chat_id"] != str(chat_id) or row["first_name"] != first_name):
+                # مقدار خالی جدید، اطلاعات قبلی کاربر (مثل یوزرنیم) را پاک نمی‌کند
+                first_name = first_name if first_name is not None else row["first_name"]
+                username = username if username is not None else row["username"]
+                display_name = display_name if display_name is not None else row["display_name"]
+                if chat_id and (
+                    row["chat_id"] != str(chat_id)
+                    or row["first_name"] != first_name
+                    or row["username"] != username
+                    or row["display_name"] != display_name
+                ):
                     conn.execute(
-                        "UPDATE users SET chat_id=?, first_name=? WHERE user_key=?",
-                        (str(chat_id), first_name, user_key),
+                        "UPDATE users SET chat_id=?, first_name=?, username=?, display_name=?"
+                        " WHERE user_key=?",
+                        (str(chat_id), first_name, username, display_name, user_key),
                     )
                     row = conn.execute(
                         "SELECT * FROM users WHERE user_key=?", (user_key,)
@@ -161,9 +204,17 @@ class Storage:
                 code = str(self._rand.randint(CODE_MIN, CODE_MAX))
                 try:
                     conn.execute(
-                        "INSERT INTO users(user_key, code, chat_id, first_name, created_at)"
-                        " VALUES(?,?,?,?,?)",
-                        (user_key, code, str(chat_id) if chat_id else None, first_name, _now()),
+                        "INSERT INTO users(user_key, code, chat_id, first_name, username,"
+                        " display_name, created_at) VALUES(?,?,?,?,?,?,?)",
+                        (
+                            user_key,
+                            code,
+                            str(chat_id) if chat_id else None,
+                            first_name,
+                            username,
+                            display_name,
+                            _now(),
+                        ),
                     )
                     break
                 except sqlite3.IntegrityError:
@@ -189,13 +240,44 @@ class Storage:
 
     @staticmethod
     def _to_user(row: sqlite3.Row) -> UserRecord:
+        keys = row.keys()
         return UserRecord(
             user_key=row["user_key"],
             code=row["code"],
             chat_id=row["chat_id"],
             first_name=row["first_name"],
             created_at=row["created_at"],
+            username=row["username"] if "username" in keys else None,
+            display_name=row["display_name"] if "display_name" in keys else None,
+            is_blocked=bool(row["is_blocked"]) if "is_blocked" in keys else False,
         )
+
+    def list_users(self, limit: int = 100000) -> list[UserRecord]:
+        """همه اعضای ثبت‌شده ربات (برای دستور اعضا و اطلاع‌رسانی همگانی)."""
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY created_at, user_key LIMIT ?", (limit,)
+            ).fetchall()
+            return [self._to_user(r) for r in rows]
+
+    def count_users(self) -> int:
+        with self._lock, self._connect() as conn:
+            return int(conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"])
+
+    def get_user_by_code(self, code: str) -> UserRecord | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE code=?", (str(code),)
+            ).fetchone()
+            return self._to_user(row) if row else None
+
+    def set_blocked_by_code(self, code: str, blocked: bool) -> UserRecord | None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE users SET is_blocked=? WHERE code=?",
+                (1 if blocked else 0, str(code)),
+            )
+        return self.get_user_by_code(code)
 
     # ---------- سفارش‌ها ----------
     def get_active_order(self, user_key: str) -> Order | None:
@@ -320,8 +402,37 @@ class Storage:
             )
         return self.get_order(order_id)
 
+    def set_order_content(
+        self,
+        order_id: int,
+        user_key: str,
+        order_type: str,
+        request_text: str | None,
+        request_photo_file_id: str | None = None,
+    ) -> Order | None:
+        """نوع سفارش و متن/عکس درخواستی را روی پیش‌نویس همان کاربر ثبت می‌کند."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE orders SET order_type=?, request_text=?, request_photo_file_id=?,"
+                " updated_at=? WHERE id=? AND user_key=? AND status='draft'"
+                " AND receipt_file_id IS NULL",
+                (order_type, request_text, request_photo_file_id, _now(), order_id, str(user_key)),
+            )
+        return self.get_order(order_id)
+
+    def complete_delivery(self, order_id: int, video_file_id: str) -> Order | None:
+        """تحویل نهایی: ویدیو برای کاربر رفت و سفارش completed می‌شود."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE orders SET delivered_video_file_id=?, status='completed',"
+                " updated_at=? WHERE id=?",
+                (video_file_id, _now(), order_id),
+            )
+        return self.get_order(order_id)
+
     @staticmethod
     def _to_order(row: sqlite3.Row) -> Order:
+        keys = row.keys()
         return Order(
             id=int(row["id"]),
             user_key=row["user_key"],
@@ -333,6 +444,14 @@ class Storage:
             receipt_requested=bool(row["receipt_requested"]),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            order_type=row["order_type"] if "order_type" in keys else None,
+            request_text=row["request_text"] if "request_text" in keys else None,
+            request_photo_file_id=(
+                row["request_photo_file_id"] if "request_photo_file_id" in keys else None
+            ),
+            delivered_video_file_id=(
+                row["delivered_video_file_id"] if "delivered_video_file_id" in keys else None
+            ),
         )
 
     # ---------- تنظیمات دائمی (مثل ویدیوی پیش‌فرض) -------
