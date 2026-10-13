@@ -668,10 +668,10 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             store.clear_flow_state(key)
             await _answer(message)
             return
-        if len(text) < vo.MIN_ORDER_TEXT_LENGTH:
-            await message.answer(
-                f"متن کوتاه است: {len(text)} کاراکتر. حداقل {vo.MIN_ORDER_TEXT_LENGTH} کاراکتر بنویسید."
-            )
+        error = vo.order_text_error(text)
+        if error is not None:
+            # وضعیت گفتگو عمداً پاک نمی‌شود تا ارسال دوباره متن همان‌جا ثبت شود
+            await message.answer(error)
             return
         order = store.set_order_content(order_id, key, "text", text)
         store.clear_flow_state(key)
@@ -1014,8 +1014,12 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         if not store.attach_receipt(candidate.id, _user_key(message), photo.file_id):
             await message.answer(vo.RECEIPT_DUPLICATE_TEXT, reply_markup=build_main_keyboard())
             return
-        await message.answer(vo.RECEIPT_RECEIVED_TEXT, reply_markup=build_main_keyboard())
-        await _notify_admin_receipt(bot, candidate.id)
+        # تأیید کاربر و ارسال رسید برای مدیر هم‌زمان انجام می‌شوند تا هیچ‌کدام
+        # منتظر دیگری نماند و رسید فوری برسد.
+        await asyncio.gather(
+            message.answer(vo.RECEIPT_RECEIVED_TEXT, reply_markup=build_main_keyboard()),
+            _notify_admin_receipt(bot, candidate.id),
+        )
 
     async def _notify_admin_receipt(bot: Bot, order_id: int) -> None:
         order = store.get_order(order_id)
@@ -1030,20 +1034,26 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             return
         user = store.get_user(order.user_key)
         try:
-            # جزئیات سفارش فقط یک بار و همراه خودِ رسید ارسال می‌شود (کپشن عکس)
-            await bot.send_photo(
-                chat_id=settings.admin_chat_id,
-                photo=order.receipt_file_id,
-                caption=vo.order_admin_caption(order, user),
-                parse_mode="HTML",
-                reply_markup=build_admin_order_keyboard(order.id),
-            )
-            if order.order_type == "photo" and order.request_photo_file_id:
-                await bot.send_photo(
+            # جزئیات سفارش فقط یک بار و همراه خودِ رسید ارسال می‌شود (کپشن عکس).
+            # اگر سفارش با عکس بوده، عکس درخواستی هم هم‌زمان می‌رود، نه پشت سر آن.
+            sends = [
+                bot.send_photo(
                     chat_id=settings.admin_chat_id,
-                    photo=order.request_photo_file_id,
-                    caption=f"🖼 عکس درخواستی کاربر برای سفارش شماره {order.id}",
+                    photo=order.receipt_file_id,
+                    caption=vo.order_admin_caption(order, user),
+                    parse_mode="HTML",
+                    reply_markup=build_admin_order_keyboard(order.id),
                 )
+            ]
+            if order.order_type == "photo" and order.request_photo_file_id:
+                sends.append(
+                    bot.send_photo(
+                        chat_id=settings.admin_chat_id,
+                        photo=order.request_photo_file_id,
+                        caption=f"🖼 عکس درخواستی کاربر برای سفارش شماره {order.id}",
+                    )
+                )
+            await asyncio.gather(*sends)
         except Exception:
             logger.exception(
                 "ارسال رسید سفارش %s برای مدیر ممکن نشد؛ سفارش در صف بررسی باقی است.",

@@ -59,12 +59,13 @@ ORDER_TYPES = {
     "text": "ساخت ویدیو با متن",
     "photo": "ساخت ویدیو با عکس",
 }
-MIN_ORDER_TEXT_LENGTH = 100
+MIN_ORDER_TEXT_WORDS = 10
+MAX_ORDER_TEXT_WORDS = 100
 
 TYPE_BUTTON_TEXT = "نوع ساخت ویدیو را انتخاب کنید:"
 ORDER_TEXT_PROMPT = (
     "✍️ متن موردنظرتان برای ساخت ویدیو را ارسال کنید.\n"
-    f"متن باید حداقل {MIN_ORDER_TEXT_LENGTH} کاراکتر باشد."
+    "متن باید بین ۱۰ تا ۱۰۰ کلمه باشد."
 )
 ORDER_PHOTO_PROMPT = (
     "🖼 عکس موردنظرتان را همراه با یک متن توضیحی (در کپشن عکس) ارسال کنید.\n"
@@ -119,6 +120,35 @@ ADMIN_NOT_CONFIGURED_TEXT = (
 def fa_digits(value: int | str) -> str:
     """عدد لاتین را به رقم فارسی تبدیل می‌کند."""
     return str(value).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+
+
+def count_words(text: str | None) -> int:
+    """تعداد کلمه‌ها؛ کلمه‌ها با فاصله/خط تازه از هم جدا می‌شوند."""
+    return len((text or "").split())
+
+
+def order_text_error(text: str | None) -> str | None:
+    """خطای متن سفارش ویدیو؛ None یعنی متن در بازه ۱۰ تا ۱۰۰ کلمه است.
+
+    وقتی این خطا داده می‌شود، فرایند سفارش قطع نمی‌شود و کاربر همان‌جا
+    متن اصلاح‌شده را دوباره می‌فرستد.
+    """
+    words = count_words(text)
+    if words < MIN_ORDER_TEXT_WORDS:
+        return (
+            f"متن کوتاه است: {fa_digits(words)} کلمه. "
+            f"متن باید بین {fa_digits(MIN_ORDER_TEXT_WORDS)} تا "
+            f"{fa_digits(MAX_ORDER_TEXT_WORDS)} کلمه باشد.\n"
+            "فرایند قطع نشده است؛ متن کامل را همین‌جا دوباره ارسال کنید."
+        )
+    if words > MAX_ORDER_TEXT_WORDS:
+        return (
+            f"متن طولانی است: {fa_digits(words)} کلمه. "
+            f"متن باید بین {fa_digits(MIN_ORDER_TEXT_WORDS)} تا "
+            f"{fa_digits(MAX_ORDER_TEXT_WORDS)} کلمه باشد.\n"
+            "فرایند قطع نشده است؛ متن کوتاه‌تر را همین‌جا دوباره ارسال کنید."
+        )
+    return None
 
 
 def format_amount(amount_toman: int | None) -> str:

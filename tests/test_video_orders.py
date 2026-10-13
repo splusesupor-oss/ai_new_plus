@@ -320,6 +320,41 @@ class VideoFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ویدیوی پیش‌فرض", bot.sent[-1]["text"])
         self.assertIsNotNone(self.storage.get_flow_state("424242"))
 
+    async def test_order_text_10_to_100_words_and_resend_after_incomplete(self):
+        # مرزهای بازه کلمه‌ای
+        self.assertIsNotNone(vo.order_text_error("یک دو سه"))
+        self.assertIsNone(vo.order_text_error("کلمه " * 10))
+        self.assertIsNone(vo.order_text_error("کلمه " * 100))
+        self.assertIsNotNone(vo.order_text_error("کلمه " * 101))
+
+        await self._send(make_update(texts.BTN_CREATE_VIDEO, update_id=400))
+        await self._send(make_callback("vt:text", update_id=401))
+        prompt = self.bot.sent[-1]["text"]
+        self.assertIn("بین ۱۰ تا ۱۰۰ کلمه", prompt)
+        self.assertNotIn("کاراکتر", prompt)
+
+        # ۹ کلمه: رد می‌شود ولی فرایند قطع نمی‌شود و همان سفارش می‌ماند
+        await self._send(make_update("یک دو سه چهار پنج شش هفت هشت نه", update_id=402))
+        self.assertIn("۹ کلمه", self.bot.sent[-1]["text"])
+        self.assertIn("فرایند قطع نشده است", self.bot.sent[-1]["text"])
+        flow = self.storage.get_flow_state("456")
+        self.assertIsNotNone(flow)
+        self.assertTrue(flow[0].startswith("wait_order_text"))
+        self.assertIsNone(self.storage.get_active_order("456").request_text)
+
+        # ۱۰۱ کلمه هم همان‌جا رد و فرایند حفظ می‌شود
+        await self._send(make_update("کلمه " * 101, update_id=403))
+        self.assertIn("۱۰۱ کلمه", self.bot.sent[-1]["text"])
+        self.assertIsNone(self.storage.get_active_order("456").request_text)
+
+        # ارسال دوباره متن درست (۱۰ کلمه) همان‌جا ثبت و مرحله مدل باز می‌شود
+        valid = "یک دو سه چهار پنج شش هفت هشت نه ده"
+        await self._send(make_update(valid, update_id=404))
+        self.assertIn("متن سفارش ثبت شد", self.bot.sent[-1]["text"])
+        order = self.storage.get_active_order("456")
+        self.assertEqual(order.request_text, valid)
+        self.assertIsNone(self.storage.get_flow_state("456"))
+
     async def test_payment_card_uploaded_once_then_sent_by_file_id(self):
         # بات جعلی‌ای که مثل API واقعی بعد از آپلود، file_id برمی‌گرداند
         class UploadReturningBot(FakeBot):
