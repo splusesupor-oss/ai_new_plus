@@ -82,6 +82,19 @@ class UserRecord:
 
 
 @dataclass(frozen=True)
+class SupportMessage:
+    """یک پیام پشتیبانی کاربر و پیام متناظر آن نزد مدیر."""
+
+    id: int
+    user_key: str
+    user_chat_id: str | None
+    admin_chat_id: str | None
+    admin_message_id: str | None  # شناسه پیام ربات در چت مدیر (برای ریپلای)
+    user_message_id: str | None
+    created_at: str
+
+
+@dataclass(frozen=True)
 class Order:
     id: int
     user_key: str
@@ -160,6 +173,17 @@ class Storage:
                     payload TEXT,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS support_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_key TEXT NOT NULL REFERENCES users(user_key),
+                    user_chat_id TEXT,
+                    admin_chat_id TEXT,
+                    admin_message_id TEXT,
+                    user_message_id TEXT,
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_support_admin_message
+                    ON support_messages(admin_chat_id, admin_message_id);
                 """
             )
             # مهاجرت دیتابیس‌های قبلی: ستون‌های جدید بدون حذف داده‌های فعلی
@@ -343,6 +367,69 @@ class Storage:
                 (1 if blocked else 0, str(code)),
             )
         return self.get_user_by_code(code)
+
+    # ---------- پشتیبانی (پیام کاربر ← مدیر، پاسخ با ریپلای) ----------
+    def create_support_message(
+        self,
+        user_key: str,
+        user_chat_id: str | None,
+        admin_chat_id: str | None,
+        user_message_id: str | None = None,
+    ) -> SupportMessage:
+        """تیکت پشتیبانی می‌سازد تا پاسخ مدیر دقیقاً به همین کاربر برسد."""
+        with self._lock, self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO support_messages(user_key, user_chat_id, admin_chat_id,"
+                " user_message_id, created_at) VALUES(?,?,?,?,?)",
+                (
+                    str(user_key),
+                    str(user_chat_id) if user_chat_id else None,
+                    str(admin_chat_id) if admin_chat_id else None,
+                    str(user_message_id) if user_message_id else None,
+                    _now(),
+                ),
+            )
+            ticket_id = int(cur.lastrowid)
+        return self.get_support_message(ticket_id)  # type: ignore[return-value]
+
+    def set_support_admin_message(self, ticket_id: int, admin_message_id: str) -> None:
+        """شناسه پیامی که ربات در چت مدیر فرستاد؛ کلید اتصال ریپلای مدیر است."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE support_messages SET admin_message_id=? WHERE id=?",
+                (str(admin_message_id), ticket_id),
+            )
+
+    def get_support_message(self, ticket_id: int) -> SupportMessage | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM support_messages WHERE id=?", (ticket_id,)
+            ).fetchone()
+            return self._to_support(row) if row else None
+
+    def get_support_by_admin_message(
+        self, admin_chat_id: str, admin_message_id: str
+    ) -> SupportMessage | None:
+        """تیکت متناظر با پیامی که مدیر رویش ریپلای کرده است."""
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM support_messages WHERE admin_chat_id=?"
+                " AND admin_message_id=? ORDER BY id DESC LIMIT 1",
+                (str(admin_chat_id), str(admin_message_id)),
+            ).fetchone()
+            return self._to_support(row) if row else None
+
+    @staticmethod
+    def _to_support(row: sqlite3.Row) -> SupportMessage:
+        return SupportMessage(
+            id=int(row["id"]),
+            user_key=row["user_key"],
+            user_chat_id=row["user_chat_id"],
+            admin_chat_id=row["admin_chat_id"],
+            admin_message_id=row["admin_message_id"],
+            user_message_id=row["user_message_id"],
+            created_at=row["created_at"],
+        )
 
     # ---------- سفارش‌ها ----------
     def get_active_order(self, user_key: str) -> Order | None:

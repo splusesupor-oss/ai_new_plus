@@ -37,17 +37,24 @@ class FakeBot:
         self.sent.append(
             {"chat_id": chat_id, "text": text, "reply_markup": reply_markup, **kwargs}
         )
-        return None
+        # مثل API واقعی، پیام ساخته‌شده با message_id برگردانده می‌شود
+        from types import SimpleNamespace
+
+        return SimpleNamespace(message_id=10_000 + len(self.sent))
 
     async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **kwargs):
         self.photos.append(
             {"chat_id": chat_id, "photo": photo, "caption": caption, "reply_markup": reply_markup}
         )
-        return None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(message_id=20_000 + len(self.photos))
 
     async def send_video(self, chat_id, video, caption=None, reply_markup=None, **kwargs):
         self.videos.append({"chat_id": chat_id, "video": video, "caption": caption})
-        return None
+        from types import SimpleNamespace
+
+        return SimpleNamespace(message_id=30_000 + len(self.videos))
 
     async def answer_callback_query(self, callback_query_id, text=None, show_alert=None, **kwargs):
         self.callback_answers.append({"id": callback_query_id, "text": text})
@@ -98,7 +105,7 @@ class HandlersTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_static_buttons_via_dispatcher(self):
         cases = {
-            texts.BTN_SAMPLES: "به‌زودی اضافه می‌شوند",
+            texts.BTN_SAMPLES: "به زودی ...",
         }
         for btn, expected in cases.items():
             with self.subTest(btn=btn):

@@ -21,6 +21,7 @@ from aiosplus.types import (
 )
 
 import image_orders
+import texts
 import video_orders
 from texts import MENU_ROWS
 
@@ -179,3 +180,23 @@ def build_image_admin_keyboard(order_id: int) -> InlineKeyboardMarkup:
 
 def inline_to_dict(keyboard: InlineKeyboardMarkup) -> dict[str, Any]:
     return keyboard.model_dump(exclude_none=True, by_alias=True)
+
+
+# ---------- گروه و کانال (دکمه‌های لینک‌دار URL) ----------
+
+def build_group_keyboard(url: str) -> InlineKeyboardMarkup:
+    """دکمه ورود به گروه روباه؛ لینک داخل خود دکمه است."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=texts.GROUP_BUTTON_TEXT, url=url)]
+        ]
+    )
+
+
+def build_channel_keyboard(url: str) -> InlineKeyboardMarkup:
+    """دکمه کانال اصلی؛ عنوان دکمه همان آیدی کانال است."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=texts.FOX_CHANNEL_USERNAME, url=url)]
+        ]
+    )

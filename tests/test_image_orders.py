@@ -63,11 +63,20 @@ class ImageFlowTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_intro_image_and_bold_text(self):
         await self._start_image()
-        self.assertTrue(self.bot.photos)  # عکس روباه اول می‌آید
-        intro = self.bot.sent[-1]
-        self.assertIn("<b>", intro["text"])
-        self.assertIn("🖼 سفارش تصویر با هوش مصنوعی روباه", intro["text"])
-        self.assertIn("نحوه تولید را انتخاب کنید", intro["text"])
+        # عکس و متن و دکمه‌ها باید در یک پیام واحد باشند، نه دو پیام جدا
+        self.assertEqual(len(self.bot.photos), 1)
+        self.assertEqual(self.bot.sent, [])
+        intro = self.bot.photos[0]
+        self.assertTrue(str(intro["photo"]).endswith("image_hero.jpg"))
+        self.assertIn("<b>", intro["caption"])
+        self.assertIn("🖼 سفارش تصویر با هوش مصنوعی روباه", intro["caption"])
+        self.assertIn("نحوه تولید را انتخاب کنید", intro["caption"])
+        modes = [
+            b.text
+            for row in intro["reply_markup"].inline_keyboard
+            for b in row
+        ]
+        self.assertEqual(modes, ["تولید تصویر", "ویرایش تصویر", "تغییر چهره"])
 
     async def test_generation_flow_deducts_10_and_notifies_admin(self):
         await self._start_image()
@@ -85,6 +94,19 @@ class ImageFlowTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(admin_msg)
         self.assertIn("روباه نارنجی", admin_msg[-1]["text"])
         self.assertIn("تولید تصویر", admin_msg[-1]["text"])
+
+    async def test_admin_as_user_can_finish_generation_prompt(self):
+        # رگرسیون: صاحب ربات (مدیر) هم وقتی «ساخت تصویر» را شروع می‌کند باید
+        # بتواند پرامپت بفرستد و سفارشش ثبت شود (قبلاً این مرحله گیر می‌کرد).
+        await self._start_image(uid=10, **ADMIN)
+        await self._send(make_callback("it:gen", update_id=11, **ADMIN))
+        await self._send(make_callback("im:3", update_id=12, **ADMIN))
+        await self._send(make_update("روباهی که برای مدیر نقاشی می‌کشد", update_id=13, **ADMIN))
+        order = self.storage.list_user_orders("999")[0]
+        self.assertEqual(order.service, "image")
+        self.assertEqual(order.model, "fox plus 6")
+        self.assertEqual(order.request_text, "روباهی که برای مدیر نقاشی می‌کشد")
+        self.assertEqual(self.storage.ensure_daily_credit("999"), 40)
 
     async def test_edit_flow_photo_with_caption_and_admin_photo(self):
         await self._start_image()

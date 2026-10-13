@@ -43,7 +43,7 @@ class ButtonsTest(unittest.TestCase):
 
     def test_not_launched_buttons(self):
         self.assertIn("هنوز راه‌اندازی نشده است", route_message(texts.BTN_FREE_CREDIT, EMPTY).text)
-        self.assertIn("به‌زودی اضافه می‌شوند", route_message(texts.BTN_SAMPLES, EMPTY).text)
+        self.assertEqual(route_message(texts.BTN_SAMPLES, EMPTY).text, "به زودی ...")
 
     def test_static_buttons_have_distinct_replies(self):
         buttons = [

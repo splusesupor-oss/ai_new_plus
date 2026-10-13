@@ -44,12 +44,11 @@ FREE_CREDIT_TEXT = (
     "سیستم اعتبار رایگان هنوز راه‌اندازی نشده است. به‌زودی اطلاع‌رسانی می‌شود."
 )
 
-SAMPLES_TEXT = (
-    "🖼 نمونه‌ها\n"
-    "\n"
-    "نمونه‌ها به‌زودی اضافه می‌شوند."
-)
+SAMPLES_TEXT = "به زودی ..."
 
+# «ارتباط با پشتیبانی» دیگر متن ثابت نیست؛ در handlers کاربر پیام می‌نویسد
+# و پیامش برای مدیر ارسال می‌شود (متن راهنمای شروع در support.py است).
+# این ثابت فقط برای مسیر قدیمیِ bot_logic نگه داشته شده است.
 SUPPORT_NOT_SET_TEXT = (
     "💬 ارتباط با پشتیبانی\n"
     "\n"
@@ -67,6 +66,15 @@ CHANNEL_NOT_SET_TEXT = (
     "\n"
     "در حال حاضر لینک کانال تنظیم نشده است. به‌زودی اضافه می‌شود."
 )
+
+# لینک‌هایی که مدیر ربات داده است (با متغیر محیطی قابل تغییرند)
+FOX_GROUP_URL = "https://splus.ir/joingroup/AI_hfuzaN9GGKPWF0MsDJg"
+GROUP_BUTTON_TEXT = "🦊 ورود به گروه روباه"
+GROUP_CAPTION = "👥 گروه روباه"
+
+FOX_CHANNEL_USERNAME = "@ai_fox"
+FOX_CHANNEL_URL = "https://splus.ir/ai_fox"
+CHANNEL_MAIN_TEXT = "🦑 : کانال اصلی انجمن روباه"
 
 UNKNOWN_TEXT = (
     "متوجه نشدم. 🦊\n"

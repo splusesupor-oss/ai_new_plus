@@ -19,6 +19,7 @@ from aiosplus.filters import Command, Text
 from aiosplus.types import CallbackQuery, Message
 
 import image_orders as io
+import support as sup
 import texts
 import video_orders as vo
 from bot_logic import route_message
@@ -26,8 +27,10 @@ from config import Settings
 from keyboards import (
     build_admin_order_keyboard,
     build_broadcast_keyboard,
+    build_channel_keyboard,
     build_deliver_keyboard,
     build_duration_keyboard,
+    build_group_keyboard,
     build_image_admin_keyboard,
     build_image_mode_keyboard,
     build_image_model_keyboard,
@@ -317,6 +320,65 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             except Exception:
                 logger.exception("اطلاع‌رسانی نتیجه بررسی به کاربر ممکن نشد (order=%s)", order_id)
 
+    # ---------- پاسخ پشتیبانی: مدیر روی پیام کاربر ریپلای می‌کند ----------
+    def _support_ticket_for_reply(message: Message):
+        reply = message.reply_to_message
+        if reply is None:
+            return None
+        ticket = store.get_support_by_admin_message(
+            str(message.chat.id), str(reply.message_id)
+        )
+        if ticket is not None:
+            return ticket
+        # مسیر پشتیبان: کد پیگیری داخل متن/کپشن پیام ریپلای‌شده
+        ref = sup.find_support_ref(" ".join(filter(None, [reply.text, reply.caption])))
+        return store.get_support_message(ref) if ref else None
+
+    def _admin_support_reply_filter(message: Message, **_kw) -> bool:
+        return _is_admin(message) and _support_ticket_for_reply(message) is not None
+
+    @dp.message(_admin_support_reply_filter)
+    async def admin_support_reply(message: Message, bot: Bot) -> None:
+        ticket = _support_ticket_for_reply(message)
+        if ticket is None:
+            return
+        owner = store.get_user(ticket.user_key)
+        target_chat = ticket.user_chat_id or (owner.chat_id if owner else None)
+        if not target_chat:
+            await message.answer("چت کاربر صاحب این پیام پشتیبانی پیدا نشد.")
+            return
+        try:
+            target: object = int(target_chat)
+        except (TypeError, ValueError):
+            target = target_chat
+        try:
+            if message.photo:
+                photo = max(message.photo, key=lambda p: (p.file_size or 0, p.width * p.height))
+                await bot.send_photo(
+                    chat_id=target,
+                    photo=photo.file_id,
+                    caption=(message.caption or sup.SUPPORT_REPLY_PREFIX),
+                )
+            elif message.video is not None:
+                await bot.send_video(
+                    chat_id=target,
+                    video=message.video.file_id,
+                    caption=(message.caption or sup.SUPPORT_REPLY_PREFIX),
+                )
+            elif message.text:
+                await bot.send_message(
+                    chat_id=target,
+                    text=f"{sup.SUPPORT_REPLY_PREFIX}:\n\n{message.text}",
+                )
+            else:
+                await message.answer("پاسخ پشتیبانی باید متن، عکس یا ویدیو باشد.")
+                return
+        except Exception:
+            logger.exception("ارسال پاسخ پشتیبانی به کاربر ممکن نشد")
+            await message.answer("ارسال پاسخ به کاربر ناموفق بود؛ دوباره تلاش کنید.")
+            return
+        await message.answer("✅ پاسخ شما برای کاربر ارسال شد.")
+
     def _admin_flow_filter(message: Message, **_kwargs) -> bool:
         uname = message.from_user.username if message.from_user else None
         if not is_admin_ids(_user_key(message), message.chat.id, uname):
@@ -444,8 +506,8 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         )
 
     def _order_text_flow_filter(message: Message, **_kw) -> bool:
-        if _is_admin(message):
-            return False
+        # مدیر هم اگر خودش فرایند سفارش را شروع کرده، مثل کاربر ادامه می‌دهد؛
+        # هندلرهای مدیریتی بالاتر زودتر اجرا می‌شوند و تداخلی پیش نمی‌آید.
         state = store.get_flow_state(_user_key(message))
         return state is not None and state[0].startswith("wait_order_text")
 
@@ -485,11 +547,19 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         ensure_user(message)
         store.ensure_daily_credit(_user_key(message))
         hero = Path(__file__).resolve().parent / "assets" / "image_hero.jpg"
+        # عکس و متن معرفی و دکمه‌ها همه در یک پیام واحد (عکس با کپشن) می‌روند
         if hero.is_file():
             try:
-                await bot.send_photo(chat_id=message.chat.id, photo=str(hero))
+                await bot.send_photo(
+                    chat_id=message.chat.id,
+                    photo=str(hero),
+                    caption=io.IMAGE_INTRO_HTML,
+                    parse_mode="HTML",
+                    reply_markup=build_image_mode_keyboard(),
+                )
+                return
             except Exception:
-                logger.exception("ارسال تصویر شروع ساخت تصویر ممکن نشد")
+                logger.exception("ارسال یکپارچه عکس و متن ساخت تصویر ممکن نشد؛ متن جدا می‌رود")
         await bot.send_message(
             chat_id=message.chat.id,
             text=io.IMAGE_INTRO_HTML,
@@ -510,6 +580,113 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             except Exception:
                 logger.exception("ارسال تصویر اعتبار رایگان ممکن نشد؛ متن ارسال می‌شود")
         await message.answer(text, reply_markup=build_main_keyboard())
+
+    # ---------- ارتباط با پشتیبانی / نمونه‌ها / گروه / کانال ----------
+    async def _forward_support_message(
+        bot: Bot,
+        message: Message,
+        body: str,
+        photo_file_id: str | None = None,
+    ) -> None:
+        user = ensure_user(message)
+        if not settings.admin_chat_id:
+            store.clear_flow_state(user.user_key)
+            await message.answer(sup.SUPPORT_UNAVAILABLE_TEXT, reply_markup=build_main_keyboard())
+            return
+        ticket = store.create_support_message(
+            user.user_key,
+            str(message.chat.id),
+            str(settings.admin_chat_id),
+            user_message_id=str(message.message_id),
+        )
+        try:
+            if photo_file_id:
+                sent = await bot.send_photo(
+                    chat_id=settings.admin_chat_id,
+                    photo=photo_file_id,
+                    caption=sup.support_admin_caption(ticket.id, user, body),
+                    parse_mode="HTML",
+                )
+            else:
+                sent = await bot.send_message(
+                    chat_id=settings.admin_chat_id,
+                    text=sup.support_admin_text(ticket.id, user, body),
+                    parse_mode="HTML",
+                )
+        except Exception:
+            logger.exception("ارسال پیام پشتیبانی برای مدیر ممکن نشد")
+            await message.answer(sup.SUPPORT_SEND_FAILED_TEXT)
+            return
+        admin_message_id = getattr(sent, "message_id", None)
+        if admin_message_id is not None:
+            store.set_support_admin_message(ticket.id, str(admin_message_id))
+        store.clear_flow_state(user.user_key)
+        await message.answer(sup.SUPPORT_SENT_TEXT, reply_markup=build_main_keyboard())
+
+    @dp.message(Text(text=texts.BTN_SUPPORT))
+    async def start_support(message: Message) -> None:
+        ensure_user(message)
+        if not settings.admin_chat_id:
+            await message.answer(sup.SUPPORT_UNAVAILABLE_TEXT, reply_markup=build_main_keyboard())
+            return
+        store.set_flow_state(_user_key(message), "support_wait_message")
+        await message.answer(sup.SUPPORT_PROMPT_TEXT)
+
+    @dp.message(Text(text=texts.BTN_SAMPLES))
+    async def samples(message: Message) -> None:
+        await message.answer(texts.SAMPLES_TEXT, reply_markup=build_main_keyboard())
+
+    @dp.message(Text(text=texts.BTN_GROUP))
+    async def fox_group(message: Message, bot: Bot) -> None:
+        ensure_user(message)
+        url = settings.group_url or texts.FOX_GROUP_URL
+        img = Path(__file__).resolve().parent / "assets" / "fox_group.jpg"
+        if not img.is_file():
+            img = Path(__file__).resolve().parent / "assets" / "image_hero.jpg"
+        markup = build_group_keyboard(url)
+        if img.is_file():
+            try:
+                await bot.send_photo(
+                    chat_id=message.chat.id,
+                    photo=str(img),
+                    caption=texts.GROUP_CAPTION,
+                    reply_markup=markup,
+                )
+                return
+            except Exception:
+                logger.exception("ارسال عکس گروه روباه ممکن نشد؛ فقط دکمه ارسال می‌شود")
+        await bot.send_message(chat_id=message.chat.id, text=texts.GROUP_CAPTION, reply_markup=markup)
+
+    @dp.message(Text(text=texts.BTN_CHANNEL))
+    async def fox_channel(message: Message, bot: Bot) -> None:
+        ensure_user(message)
+        url = settings.channel_url or texts.FOX_CHANNEL_URL
+        if url.startswith("@"):
+            url = f"https://splus.ir/{url.lstrip('@')}"
+        await bot.send_message(
+            chat_id=message.chat.id,
+            text=texts.CHANNEL_MAIN_TEXT,
+            reply_markup=build_channel_keyboard(url),
+        )
+
+    def _support_flow_filter(message: Message, **_kw) -> bool:
+        state = store.get_flow_state(_user_key(message))
+        if state is None or state[0] != "support_wait_message":
+            return False
+        menu_texts = {t for row in texts.MENU_ROWS for t in row} | {
+            texts.MENU_TEXT_COMMAND,
+            "/start",
+            "/menu",
+        }
+        return (message.text or "").strip() not in menu_texts
+
+    @dp.message(_support_flow_filter)
+    async def user_support_message(message: Message, bot: Bot) -> None:
+        body = (message.text or "").strip()
+        if not body:
+            await message.answer(sup.SUPPORT_PROMPT_TEXT)
+            return
+        await _forward_support_message(bot, message, body)
 
     async def _submit_image_order(
         bot: Bot,
@@ -566,8 +743,8 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
             logger.exception("ارسال سفارش تصویر %s برای مدیر ممکن نشد", order.id)
 
     def _img_prompt_filter(message: Message, **_kw) -> bool:
-        if _is_admin(message):
-            return False
+        # مهم: مدیر (صاحب ربات) هم وقتی «ساخت تصویر» را شروع کرده باید بتواند
+        # پرامپت بفرستد؛ حذف این استثنا علت گیرکردن مرحله پرامپت برای مدیر بود.
         state = store.get_flow_state(_user_key(message))
         return state is not None and state[0] == "img_wait_prompt"
 
@@ -623,6 +800,13 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
     async def on_photo(message: Message, bot: Bot) -> None:
         ensure_user(message)
         flow = store.get_flow_state(_user_key(message))
+        if flow is not None and flow[0] == "support_wait_message":
+            # پیام پشتیبانیِ تصویری: عکس (با توضیحش اگر باشد) برای مدیر می‌رود
+            photo = max(message.photo, key=lambda p: (p.file_size or 0, p.width * p.height))
+            await _forward_support_message(
+                bot, message, (message.caption or "").strip(), photo_file_id=photo.file_id
+            )
+            return
         if flow is not None and flow[0] == "img_wait_photo":
             mode, _, model = (flow[1] or "").partition("|")
             caption = (message.caption or "").strip()
@@ -1036,20 +1220,9 @@ def build_dispatcher(settings: Settings, storage: Storage | None = None) -> Disp
         await _apply_admin_decision(bot, order_id, approve, admin_chat_id=chat_id)
         await _cb_answer(bot, callback, "پرداخت تأیید شد ✅" if approve else "پرداخت رد شد ❌")
 
-    # ---------- بقیه دکمه‌های منوی اصلی و fallback ----------
-    @dp.message(
-        Text(
-            text=[
-                texts.BTN_SAMPLES,
-                texts.BTN_SUPPORT,
-                texts.BTN_GROUP,
-                texts.BTN_CHANNEL,
-            ]
-        )
-    )
-    async def on_main_menu_button(message: Message) -> None:
-        await _answer(message)
-
+    # ---------- fallback ----------
+    # «نمونه‌ها»، «ارتباط با پشتیبانی»، «گروه روباه» و «کانال روباه» بالاتر
+    # هندلر اختصاصی دارند و دیگر به‌صورت متن ثابت پاسخ داده نمی‌شوند.
     # متن/فایل غیرعکس در حالی که ربات منتظر تصویر رسید این کاربر است
     @dp.message(_has_receipt_candidate)
     async def on_invalid_receipt_content(message: Message) -> None:
