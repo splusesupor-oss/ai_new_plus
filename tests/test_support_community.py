@@ -125,9 +125,12 @@ class SupportCommunityTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_group_photo_and_url_button(self):
         await self._send(make_update(texts.BTN_GROUP, update_id=1))
-        self.assertTrue(self.bot.photos)
+        # گروه باید فقط یک پیام واحد باشد: عکس + کپشن + دکمه، بدون پیام متنی جدا
+        self.assertEqual(self.bot.sent, [])
+        self.assertEqual(len(self.bot.photos), 1)
         photo = self.bot.photos[-1]
         self.assertTrue(str(photo["photo"]).endswith("fox_group.jpg"))
+        self.assertEqual(photo["caption"], texts.GROUP_CAPTION)
         data = inline_to_dict(photo["reply_markup"])
         button = data["inline_keyboard"][0][0]
         self.assertEqual(button["url"], "https://splus.ir/joingroup/AI_hfuzaN9GGKPWF0MsDJg")
